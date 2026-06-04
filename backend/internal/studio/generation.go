@@ -113,6 +113,12 @@ func buildGenerationTaskResponse(task *hostTask) map[string]interface{} {
 		if v, ok := task.Input["prompt"]; ok {
 			resp["prompt"] = v
 		}
+		if images := stringSliceFromAny(task.Input["images"]); len(images) > 0 {
+			resp["input_images"] = images
+		}
+		if mask, ok := task.Input["mask"].(string); ok && mask != "" {
+			resp["input_mask"] = mask
+		}
 	}
 	if task.Output != nil {
 		if content, ok := task.Output["content"].(string); ok && content != "" {
@@ -164,4 +170,23 @@ func extractImageInputs(inputs []generationInput) []string {
 		images = append(images, input.URL)
 	}
 	return images
+}
+
+func stringSliceFromAny(value interface{}) []string {
+	var out []string
+	switch v := value.(type) {
+	case []string:
+		out = append(out, v...)
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+	case string:
+		if strings.TrimSpace(v) != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

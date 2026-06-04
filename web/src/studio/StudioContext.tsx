@@ -90,6 +90,10 @@ function taskAssetCreatedAt(task: GenerationTask): string {
   return task.completed_at || task.created_at;
 }
 
+function taskSourceUrl(task: GenerationTask): string | undefined {
+  return task.input_images?.find(url => !!url);
+}
+
 async function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
@@ -300,6 +304,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
           mode: operationToImageMode(t.operation ?? 'generate'),
           size: taskSize(t),
           createdAt: taskAssetCreatedAt(t),
+          sourceUrl: taskSourceUrl(t),
         });
       }
     }
@@ -370,6 +375,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
                 mode: operationToImageMode(t.operation ?? 'generate'),
                 size: taskSize(done),
                 createdAt: taskAssetCreatedAt(done),
+                sourceUrl: taskSourceUrl(done),
               })),
               ...prev,
             ]);
@@ -451,6 +457,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
                 mode: operationToImageMode(remote.operation ?? 'generate'),
                 size: taskSize(remote),
                 createdAt: taskAssetCreatedAt(remote),
+                sourceUrl: taskSourceUrl(remote),
               })),
               ...prev,
             ]);
@@ -705,16 +712,18 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const regenerate = useCallback((item: GalleryItem) => {
+    const mode = item.mode === 'batch' ? 'text2img' : item.mode;
+    const sourceImage = item.sourceUrl ?? (mode === 'img2img' || mode === 'inpaint' ? item.url : undefined);
     setSelectedModelId(item.model);
-    setImageMode(item.mode === 'batch' ? 'text2img' : item.mode);
+    setImageMode(mode);
     if (item.size) setImageSize(item.size);
     // Regenerate resets references to the original source (one item only —
     // GalleryItem.sourceUrl can't carry multiple references today).
-    setReferenceImages(item.sourceUrl ? [item.sourceUrl] : []);
+    setReferenceImages(sourceImage ? [sourceImage] : []);
     setTimeout(() => {
       generate(item.prompt, {
-        mode: item.mode === 'batch' ? 'text2img' : item.mode,
-        sourceImage: item.sourceUrl,
+        mode,
+        sourceImage,
       });
     }, 0);
   }, [generate, setSelectedModelId, setImageMode, setImageSize]);

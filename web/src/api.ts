@@ -64,6 +64,8 @@ export interface GenerationTask {
   operation?: string;
   size?: string;
   quality?: string;
+  input_images?: string[];
+  input_mask?: string;
   result_content?: string;
   error_message?: string;
   created_at: string;
