@@ -10,13 +10,13 @@ import (
 )
 
 const (
-	hostMethodTasksCreate  = "tasks.create"
-	hostMethodTasksGet     = "tasks.get"
-	hostMethodTasksList    = "tasks.list"
-	hostMethodTasksDelete  = "tasks.delete"
+	hostMethodTasksCreate   = "tasks.create"
+	hostMethodTasksGet      = "tasks.get"
+	hostMethodTasksList     = "tasks.list"
+	hostMethodTasksDelete   = "tasks.delete"
 	hostMethodPlatformsList = "platforms.list"
-	hostMethodModelsList   = "models.list"
-	hostMethodUsersGet     = "users.get"
+	hostMethodModelsList    = "models.list"
+	hostMethodUsersGet      = "users.get"
 )
 
 func hostInvoke(ctx context.Context, host sdk.Host, method string, payload map[string]interface{}) (map[string]interface{}, error) {

@@ -4,7 +4,7 @@ GO := GOTOOLCHAIN=local go
 
 WEBDIST := backend/internal/studio/webdist
 
-.PHONY: help install build build-web build-backend release dev ensure-webdist sync-webdist clean test vet ci pre-commit type-check fmt setup-hooks
+.PHONY: help install build build-web build-backend release dev ensure-webdist sync-webdist clean test vet ci pre-commit lint type-check fmt setup-hooks
 
 help: ## 显示帮助信息
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -71,9 +71,19 @@ dev: build-web ## 构建前端资产并提示如何在 core 里 dev 加载本插
 
 # ===================== 质量检查 =====================
 
-ci: type-check vet test build-backend ## 本地运行与 CI 完全一致的检查
+ci: ensure-webdist lint vet test build-backend ## 本地运行与 CI 完全一致的检查
 
-pre-commit: ensure-webdist type-check test vet ## pre-commit hook 调用
+pre-commit: ensure-webdist lint test vet ## pre-commit hook 调用
+
+lint: ## 代码检查（需要安装 golangci-lint）
+	@if ! command -v golangci-lint > /dev/null 2>&1; then \
+		echo "错误: 未安装 golangci-lint，请执行: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
+		exit 1; \
+	fi
+	@cd backend && golangci-lint run ./...
+	@cd web && pnpm exec tsc --noEmit
+	@cd web && pnpm lint
+	@echo "代码检查通过"
 
 type-check: ## 前端 TypeScript 类型检查
 	cd web && pnpm type-check
@@ -89,11 +99,13 @@ fmt: ## 格式化后端代码
 
 # ===================== Git Hooks =====================
 
-setup-hooks: ## 安装 Git pre-commit hook
+setup-hooks: ## 安装 Git hooks（pre-commit + commit-msg）
 	@echo '#!/bin/sh' > .git/hooks/pre-commit
 	@echo 'make pre-commit' >> .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
-	@echo "pre-commit hook 已安装"
+	@cp scripts/commit-msg .git/hooks/commit-msg
+	@chmod +x .git/hooks/commit-msg
+	@echo "Git hooks 已安装（pre-commit + commit-msg）"
 
 # ===================== 清理 =====================
 

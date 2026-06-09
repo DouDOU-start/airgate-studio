@@ -10,7 +10,7 @@ import {
 import { api } from '../api';
 import type { GenerationTask } from '../api';
 import type { GalleryItem, StudioGenerationTask, ImageMode, MediaType } from './types';
-import { getModelConfig, getDefaultModel, MODEL_REGISTRY, type ModelConfig } from './modelConfig';
+import { getModelConfig, getDefaultModel, type ModelConfig } from './modelConfig';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
