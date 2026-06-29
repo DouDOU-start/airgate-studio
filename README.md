@@ -1,4 +1,18 @@
-# AirGate Studio（创作中心）
+<div align="center">
+  <h1>AirGate Studio</h1>
+
+  <p><strong>多模态内容创作中心插件</strong></p>
+
+  <p>
+    <a href="https://github.com/DouDOU-start/airgate-studio/releases"><img src="https://img.shields.io/github/v/release/DouDOU-start/airgate-studio?style=flat-square" alt="release" /></a>
+    <a href="https://github.com/DouDOU-start/airgate-studio/blob/master/LICENSE"><img src="https://img.shields.io/github/license/DouDOU-start/airgate-studio?style=flat-square" alt="license" /></a>
+    <a href="https://github.com/DouDOU-start/airgate-studio/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/DouDOU-start/airgate-studio/ci.yml?branch=master&style=flat-square&label=CI" alt="ci" /></a>
+    <img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go" alt="go" />
+    <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react" alt="react" />
+  </p>
+</div>
+
+---
 
 AirGate 扩展插件：面向图片、视频、音频等多模态内容生成的统一创作中心。生成任务统一走 Core 任务状态机，由网关插件执行上游调用，本插件专注创作流程与结果管理。
 
