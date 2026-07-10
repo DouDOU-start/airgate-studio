@@ -44,13 +44,21 @@ ensure-webdist:
 
 # ===================== 开发 =====================
 
-dev: ## 本地开发说明：后端 :8181 + 前端 vite :5174（代理 /api /auth /assets-runtime）
-	@echo "终端 1（后端，先准备好 Postgres 与 core）："
-	@echo "  cp backend/config.yaml.example backend/config.yaml   # 按需修改（推荐；env 亦可覆盖单项）"
-	@echo "  cd backend && go run ."
-	@echo ""
-	@echo "终端 2（前端热更新）：cd web && pnpm dev"
-	@echo "  （浏览器从非本机 IP 访问时用：pnpm dev --host）"
+dev: ## 本地开发：后端 go run（:8181，读 backend/config.yaml）+ 前端 vite dev（:5174 --host）
+	@if [ ! -f backend/config.yaml ]; then \
+		echo "缺少 backend/config.yaml，请先：cp backend/config.yaml.example backend/config.yaml 并按需修改"; \
+		exit 1; \
+	fi
+	@trap 'kill 0' EXIT; \
+	(cd backend && GOWORK=off $(GO) run .) & \
+	(cd web && pnpm dev --host) & \
+	wait
+
+dev-backend: ## 仅后端（读 backend/config.yaml；env 可覆盖单项）
+	cd backend && GOWORK=off $(GO) run .
+
+dev-web: ## 仅前端 vite dev server（--host 允许非本机 IP 访问）
+	cd web && pnpm dev --host
 
 # ===================== 质量检查 =====================
 
