@@ -12,19 +12,17 @@ import (
 )
 
 // 任务状态机：pending → processing → completed / failed（重试时 processing → pending）。
-// cancelled 预留给未来的用户主动取消。
 const (
 	TaskStatusPending    = "pending"
 	TaskStatusProcessing = "processing"
 	TaskStatusCompleted  = "completed"
 	TaskStatusFailed     = "failed"
-	TaskStatusCancelled  = "cancelled"
 )
 
 // ErrTaskNotFound 任务不存在（或不属于该用户）。
 var ErrTaskNotFound = errors.New("任务不存在")
 
-// Task 本地生成任务，替代原插件架构下 core 托管的任务。
+// Task 本地生成任务。
 type Task struct {
 	ID           int64
 	PublicID     string // public_task_id，uuid
@@ -166,11 +164,11 @@ func (s *pgTaskStore) ClaimNext(ctx context.Context) (*Task, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	q := `SELECT ` + taskColumns + ` FROM studio_tasks
-		WHERE status = '` + TaskStatusPending + `'
+		WHERE status = $1
 		ORDER BY id
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1`
-	t, err := scanTask(tx.QueryRowContext(ctx, q))
+	t, err := scanTask(tx.QueryRowContext(ctx, q, TaskStatusPending))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

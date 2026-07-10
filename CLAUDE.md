@@ -35,7 +35,10 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
         浏览器轮询任务 → 画廊展示 /assets-runtime/generated/<file>
 ```
 
-## 后端布局（`backend/internal/studio/`）
+## 后端布局
+
+入口 `backend/cmd/airgate-studio/main.go`（配置 → DB 迁移 → worker → HTTP → 优雅退出）；
+全部实现在单包 `backend/internal/studio/`：
 
 | 文件 | 职责 |
 |---|---|
@@ -46,12 +49,13 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 | `shelf.go` | 分组×模型货架：ShelfStore 接口 + pg 实现（分组镜像/开关、按组模型同步/上架、漂移标记） |
 | `admin.go` | 管理端接口（requireAdmin：config 白名单）：分组开关、按组同步模型、上架编辑 |
 | `tasks.go` | Task 模型、TaskStore 接口 + pg 实现（领取/完成/失败重试状态机） |
-| `worker.go` | 单 goroutine 轮询执行；`generateImages` 为策略分发单一切换点 + chat 回退路径 |
-| `strategy.go` | 执行策略判定纯函数（resolveStrategy）+ model→protocols 目录 TTL 缓存 |
+| `worker.go` | 单 goroutine 轮询执行；`executeTask` 按模态（kind）分发 → `executeImageTask`；`generateImages` 为图像协议分发单一切换点 |
+| `strategy.go` | 执行策略判定纯函数（resolveStrategy）+ 模态启发式（guessModalityByModelName）+ model→protocols 目录 TTL 缓存 |
 | `genimage_openai.go` | /v1/images/generations|edits 请求构造（含 multipart）与响应归一 |
 | `genimage_gemini.go` | :predict 参数映射（sampleCount/aspectRatio 等）与 :generateContent 装配/解析 |
+| `genimage_chat.go` | chat/completions 多模态回退路径装配与响应图片提取 |
 | `coreclient.go` | core HTTP 客户端（oauth 端点 + 生图端点 + models + usage） |
-| `assets.go` | 本地磁盘资产存储 + 文件名白名单校验（防路径穿越） |
+| `assets.go` | 本地磁盘资产存储、文件名白名单校验（防路径穿越）、data URI/MIME 工具 |
 | `generation.go` | 请求归一化、task input 组装、task → 前端响应映射 |
 | `routes.go` | Server 装配 + 全部 HTTP 处理器（ServeMux 路由） |
 | `spa.go` | embed webdist 托管 SPA（fallback index.html） |
@@ -62,8 +66,7 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 
 - 领取：事务内 `SELECT ... WHERE status='pending' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1`。
 - 进程重启：worker 启动先把遗留 processing 重置回 pending（单实例假设）。
-- `cancelled` 状态预留，当前无入口。
-- 任务删除同步删产物文件（output.images 中本存储管理的 URL）。
+- 任务删除同步删产物文件（output 的 images/assets 去重合并后清理本存储管理的 URL）。
 
 ## 配置
 
@@ -86,9 +89,13 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 - 禁止引入 gin/echo 等 web 框架（stdlib ServeMux 已够用）、禁止依赖 `airgate-sdk`。
 - 渠道调度/计费是 core 的职责；本服务只拿 sk- key 调 `/v1/...`，不感知渠道。
 - `api_key` 明文永不出现在任何 API 响应（`/api/user/info` 只回 `api_key_ready` 布尔）。
-- adaptor 演进：生成执行统一走 `worker.go` 的 `generateImages` 策略分发；新增执行
-  路径只加 `strategy.go` 判定分支 + `genimage_*.go` 实现，勿在 handler/store 层散落
-  协议细节。判定规则保持纯函数 + 表驱动测试。
+- adaptor 演进：生成执行统一走 `worker.go` 的 `executeTask` 按模态（kind）分发——
+  新模态（video/music…）加 `executeXxxTask` 分支 + `gen<kind>_*.go` 实现，并把 kind
+  加入 `generation.go` 的 `supportedKinds` 白名单（创建入口拦截未支持模态）；图像内部
+  按协议走 `generateImages` 策略分发，新增路径只加 `strategy.go` 判定分支 +
+  `genimage_*.go` 实现。勿在 handler/store 层散落协议细节；判定规则保持纯函数 +
+  表驱动测试。产物统一写 `output.assets`（`[{type,url}]`，images 保留兼容），任务
+  删除按 assets 清理本地文件。货架模型有 `modality` 维度（同步启发式预填、管理员可改）。
 - `/assets-runtime/generated/` 文件名必须过 `assetFileNamePattern` 白名单。
 - 注释中文；`_test.go` 同包、表驱动；DB 交互经 Store 接口抽象（单测用内存实现）。
 
@@ -98,14 +105,19 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 make install   # 前后端依赖
 make ci        # lint + vet + test + build（与 CI 一致）
 make build     # 前端构建 → 嵌入 → 单二进制 bin/airgate-studio
-make dev       # 打印本地开发（后端 go run + vite dev 代理）说明
+make dev       # 并行启动：后端 go run（:8181，读 backend/config.yaml）+ 前端 vite dev（:5174）
 cd backend && GOWORK=off go test ./internal/studio/ -v -count=1   # 后端单测
 ```
 
 ## 前端（`web/`）
 
-- 标准 Vite SPA：入口 `index.html` → `src/main.tsx`（注入主题 + i18n 空实例 +
-  拉 `/api/user/info`，401 → `/auth/login`）→ `src/App.tsx`（`UserBar` 用户区 + `StudioPage`）。
-- `src/api.ts` 同源 cookie，基路径 `/api`；401 统一跳登录。
-- i18n：组件内 `t(key, { defaultValue })` 全部自带中文兜底，`src/i18n.ts` 仅初始化空资源实例。
+- 标准 Vite SPA：入口 `index.html` → `src/main.tsx`（注入主题）→ `src/App.tsx`
+  （拉 `/api/user/info`，401 由 `lib/api.ts` 统一跳 `/auth/login`；渲染
+  `components/UserBar` 用户区 + `studio/StudioView`）。
+- 目录：`src/lib/`（api 客户端、工具）、`src/components/`（UserBar / AdminPanel）、
+  `src/studio/`（创作中心：StudioView / StudioContext / GalleryView / MaskEditor /
+  ModelPicker / SizeSelector / modelConfig / inspirations / studioStyles / types）。
+- `src/lib/api.ts` 同源 cookie，基路径 `/api`；401 统一跳登录。产物消费统一走任务响应的
+  `images`（数组）/`assets`（`[{type,url}]`）。
+- 界面文案直接写中文字面量，无 i18n 层。
 - dev：`pnpm dev`（:5174，代理 `/api` `/auth` `/assets-runtime` → :8181）。

@@ -318,17 +318,17 @@ func (s *Server) requireUser(next func(http.ResponseWriter, *http.Request, *User
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(sessionCookieName)
 		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		userID, ok := s.parseSession(cookie.Value)
 		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		user, err := s.users.GetByID(r.Context(), userID)
 		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r, user)

@@ -35,6 +35,7 @@ type ShelfModel struct {
 	ModelName     string    `json:"model_name"`
 	DisplayName   string    `json:"display_name"`
 	Protocols     []string  `json:"protocols"`
+	Modality      string    `json:"modality"`
 	Enabled       bool      `json:"enabled"`
 	SortOrder     int       `json:"sort_order"`
 	MissingAtCore bool      `json:"missing_at_core"`
@@ -44,6 +45,7 @@ type ShelfModel struct {
 // ShelfModelPatch 模型编辑的可写字段（nil = 不改）。
 type ShelfModelPatch struct {
 	DisplayName *string
+	Modality    *string
 	Enabled     *bool
 	SortOrder   *int
 }
@@ -146,11 +148,15 @@ func (s *pgShelfStore) SyncModels(ctx context.Context, coreGroupID int64, models
 		coreGroupID); err != nil {
 		return fmt.Errorf("标记漂移失败: %w", err)
 	}
+	// modality 契约：默认值 'image' 视为「未定制」，同步时允许被调用方传入的
+	// 预填值提升（覆盖存量迁移补的默认值）；管理员改过的非 image 值同步不覆盖。
 	const upsert = `
-		INSERT INTO studio_models (core_group_id, model_name, protocols, synced_at, updated_at)
-		VALUES ($1, $2, $3, now(), now())
+		INSERT INTO studio_models (core_group_id, model_name, protocols, modality, synced_at, updated_at)
+		VALUES ($1, $2, $3, $4, now(), now())
 		ON CONFLICT (core_group_id, model_name) DO UPDATE
 		SET protocols = EXCLUDED.protocols,
+		    modality = CASE WHEN studio_models.modality = 'image'
+		                    THEN EXCLUDED.modality ELSE studio_models.modality END,
 		    missing_at_core = FALSE,
 		    synced_at = now(),
 		    updated_at = now()`
@@ -159,14 +165,18 @@ func (s *pgShelfStore) SyncModels(ctx context.Context, coreGroupID int64, models
 		if err != nil {
 			return fmt.Errorf("序列化 protocols 失败: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, upsert, coreGroupID, m.ModelName, protocolsJSON); err != nil {
+		modality := m.Modality
+		if modality == "" {
+			modality = modalityImage
+		}
+		if _, err := tx.ExecContext(ctx, upsert, coreGroupID, m.ModelName, protocolsJSON, modality); err != nil {
 			return fmt.Errorf("同步模型 %s 失败: %w", m.ModelName, err)
 		}
 	}
 	return tx.Commit()
 }
 
-const shelfModelColumns = `id, core_group_id, model_name, display_name, protocols, enabled, sort_order, missing_at_core, synced_at`
+const shelfModelColumns = `id, core_group_id, model_name, display_name, protocols, modality, enabled, sort_order, missing_at_core, synced_at`
 
 func (s *pgShelfStore) ListModels(ctx context.Context, coreGroupID int64, onlyEnabled bool) ([]ShelfModel, error) {
 	q := `SELECT ` + shelfModelColumns + ` FROM studio_models WHERE core_group_id = $1`
@@ -203,12 +213,13 @@ func (s *pgShelfStore) GetModel(ctx context.Context, coreGroupID int64, modelNam
 func (s *pgShelfStore) UpdateModel(ctx context.Context, id int64, patch ShelfModelPatch) (*ShelfModel, error) {
 	q := `UPDATE studio_models
 		SET display_name = COALESCE($2, display_name),
-		    enabled = COALESCE($3, enabled),
-		    sort_order = COALESCE($4, sort_order),
+		    modality = COALESCE($3, modality),
+		    enabled = COALESCE($4, enabled),
+		    sort_order = COALESCE($5, sort_order),
 		    updated_at = now()
 		WHERE id = $1
 		RETURNING ` + shelfModelColumns
-	m, err := scanShelfModel(s.db.QueryRowContext(ctx, q, id, patch.DisplayName, patch.Enabled, patch.SortOrder))
+	m, err := scanShelfModel(s.db.QueryRowContext(ctx, q, id, patch.DisplayName, patch.Modality, patch.Enabled, patch.SortOrder))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrShelfNotFound
 	}
@@ -219,13 +230,18 @@ func scanShelfModel(row rowScanner) (*ShelfModel, error) {
 	m := &ShelfModel{}
 	var protocolsJSON []byte
 	if err := row.Scan(&m.ID, &m.CoreGroupID, &m.ModelName, &m.DisplayName, &protocolsJSON,
-		&m.Enabled, &m.SortOrder, &m.MissingAtCore, &m.SyncedAt); err != nil {
+		&m.Modality, &m.Enabled, &m.SortOrder, &m.MissingAtCore, &m.SyncedAt); err != nil {
 		return nil, err
 	}
 	if len(protocolsJSON) > 0 {
 		if err := json.Unmarshal(protocolsJSON, &m.Protocols); err != nil {
 			return nil, fmt.Errorf("解析 protocols 失败: %w", err)
 		}
+	}
+	// core 目录里没有 protocols 扩展的模型会以 JSON null 存库，
+	// 归一为空数组，保证 API 输出恒为 []（前端按数组消费）。
+	if m.Protocols == nil {
+		m.Protocols = []string{}
 	}
 	return m, nil
 }

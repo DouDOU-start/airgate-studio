@@ -179,6 +179,68 @@ func TestCreateTaskShelfValidation(t *testing.T) {
 	}
 }
 
+// TestShelfModality 模态维度：同步按模型名启发式预填 → 管理员可改（白名单校验）→
+// 用户侧 /api/models 携带 modality。
+func TestShelfModality(t *testing.T) {
+	t.Parallel()
+
+	s, users, shelf := newShelfTestServer(t,
+		`{"data":[{"id":"veo-3","protocols":["gemini"]},{"id":"gpt-image-1","protocols":["openai"]}]}`)
+	_, adminCookie := seedUser(t, s, users, 42, map[int64]string{2: "sk-admin-g2"})
+	_ = shelf.UpsertGroups(context.Background(), []ShelfGroup{{CoreGroupID: 2, Name: "vip"}})
+	_ = shelf.SetGroupEnabled(context.Background(), 2, true)
+
+	if rec := doJSON(t, s, http.MethodPost, "/api/admin/groups/2/sync-models", "", adminCookie); rec.Code != http.StatusOK {
+		t.Fatalf("sync-models = (%d, %s)", rec.Code, rec.Body.String())
+	}
+	veo, _ := shelf.GetModel(context.Background(), 2, "veo-3")
+	img, _ := shelf.GetModel(context.Background(), 2, "gpt-image-1")
+	if veo.Modality != modalityVideo || img.Modality != modalityImage {
+		t.Fatalf("同步预填 modality = (%s, %s), want (video, image)", veo.Modality, img.Modality)
+	}
+
+	// 非法 modality 拒绝。
+	if rec := doJSON(t, s, http.MethodPut, "/api/admin/models/"+itoa64(veo.ID), `{"modality":"3d"}`, adminCookie); rec.Code != http.StatusBadRequest {
+		t.Fatalf("非法 modality = (%d, %s), want 400", rec.Code, rec.Body.String())
+	}
+	// 管理员纠正 modality。
+	if rec := doJSON(t, s, http.MethodPut, "/api/admin/models/"+itoa64(veo.ID), `{"modality":"music","enabled":true}`, adminCookie); rec.Code != http.StatusOK {
+		t.Fatalf("改 modality = (%d, %s)", rec.Code, rec.Body.String())
+	}
+
+	// 用户侧模型列表携带 modality。
+	_, userCookie := seedUser(t, s, users, 7, map[int64]string{2: "sk-user-g2"})
+	rec := doJSON(t, s, http.MethodGet, "/api/models?group_id=2", "", userCookie)
+	var modelsResp struct {
+		Data []map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &modelsResp)
+	if len(modelsResp.Data) != 1 || modelsResp.Data[0]["modality"] != "music" {
+		t.Fatalf("用户模型 = %v, want veo-3 modality=music", modelsResp.Data)
+	}
+
+	// 模态与请求类型不匹配的任务在创建入口被拦截（veo-3 已被改为 music）。
+	taskBody := `{"kind":"image","operation":"generate","model":"veo-3","prompt":"a cat","group_id":2}`
+	if rec := doJSON(t, s, http.MethodPost, "/api/generation-tasks", taskBody, adminCookie); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "模态") {
+		t.Fatalf("模态错配 = (%d, %s), want 400 模态不匹配", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateTaskKindWhitelist 未支持的生成模态在创建入口被拦截。
+func TestCreateTaskKindWhitelist(t *testing.T) {
+	t.Parallel()
+
+	s, users, _ := newShelfTestServer(t, `{"data":[]}`)
+	_, userCookie := seedUser(t, s, users, 7, nil)
+
+	body := `{"kind":"video","operation":"generate","model":"veo-3","prompt":"a cat running"}`
+	rec := doJSON(t, s, http.MethodPost, "/api/generation-tasks", body, userCookie)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "暂不支持的生成类型") {
+		t.Fatalf("kind=video = (%d, %s), want 400 暂不支持", rec.Code, rec.Body.String())
+	}
+}
+
 func itoa64(v int64) string {
 	return strconv.FormatInt(v, 10)
 }

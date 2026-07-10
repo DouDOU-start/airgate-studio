@@ -1,18 +1,15 @@
-export type MediaType = 'image' | 'video' | 'music';
-
 export type ImageMode = 'text2img' | 'img2img' | 'inpaint' | 'batch';
 
 export interface GalleryItem {
   id: string;
-  taskId?: number; // core task ID for API operations
+  taskId?: number; // 后端任务 ID（删除/去重用）
   url: string;
-  alt: string;
   prompt: string;
   model: string;
   mode: ImageMode;
   size?: string;
   createdAt: string;
-  sourceUrl?: string; // for img2img/inpaint, the reference image
+  sourceUrl?: string; // img2img/inpaint 的参考图
 }
 
 export interface StudioGenerationTask {
@@ -20,12 +17,10 @@ export interface StudioGenerationTask {
   prompt: string;
   mode: ImageMode;
   status: 'queued' | 'processing' | 'completed' | 'failed';
-  progress?: number;
   result?: GalleryItem[];
   remoteTaskIds?: number[];
   error?: string;
   createdAt: string;
-  platform?: string;
   model?: string;
   size?: string;
 }

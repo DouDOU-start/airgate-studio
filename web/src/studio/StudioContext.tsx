@@ -8,9 +8,9 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { api } from '../api';
-import type { GenerationTask, GroupOption } from '../api';
-import type { GalleryItem, StudioGenerationTask, ImageMode, MediaType } from './types';
+import { api } from '../lib/api';
+import type { GenerationTask, GroupOption } from '../lib/api';
+import type { GalleryItem, StudioGenerationTask, ImageMode } from './types';
 import { isLikelyImageModel, toImageModel, type ImageModel } from './modelConfig';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -24,16 +24,6 @@ const GROUP_STORAGE_KEY = 'airgate-studio-group-id';
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function parseMarkdownImages(text: string): Array<{ url: string; alt: string }> {
-  const regex = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
-  const results: Array<{ url: string; alt: string }> = [];
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(text)) !== null) {
-    results.push({ alt: match[1], url: match[2] });
-  }
-  return results;
 }
 
 function uniqueNumbers(values: Array<number | undefined | null>): number[] {
@@ -95,6 +85,23 @@ function taskAssetCreatedAt(task: GenerationTask): string {
 
 function taskSourceUrl(task: GenerationTask): string | undefined {
   return task.input_images?.find(url => !!url);
+}
+
+// taskGalleryItems 把一个已完成任务的产物 images 映射为画廊条目（唯一组装点）。
+// overrides 供生成路径覆盖本地已知的上下文（如用户选中的模型 id、模式、参考图）。
+function taskGalleryItems(task: GenerationTask, overrides?: Partial<GalleryItem>): GalleryItem[] {
+  return (task.images ?? []).map(url => ({
+    id: uid(),
+    taskId: task.id,
+    url,
+    prompt: task.prompt,
+    model: task.model ?? '',
+    mode: operationToImageMode(task.operation ?? 'generate'),
+    size: taskSize(task),
+    createdAt: taskAssetCreatedAt(task),
+    sourceUrl: taskSourceUrl(task),
+    ...overrides,
+  }));
 }
 
 async function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -177,10 +184,6 @@ async function pollGenerationTask(
 // ── Context type ──────────────────────────────────────────────────────────────
 
 export interface StudioContextValue {
-  // Media type
-  mediaType: MediaType;
-  setMediaType: (type: MediaType) => void;
-
   // Image mode
   imageMode: ImageMode;
   setImageMode: (mode: ImageMode) => void;
@@ -196,7 +199,6 @@ export interface StudioContextValue {
   currentModel: ImageModel;
   selectedModelId: string;
   setSelectedModelId: (id: string) => void;
-  selectedPlatform: string;
   imageSize: string;
   setImageSize: (size: string) => void;
   imageQuality: string;
@@ -212,14 +214,12 @@ export interface StudioContextValue {
   isGenerating: boolean;
   tasks: StudioGenerationTask[];
   generate: (prompt: string, options?: GenerateOptions) => void;
-  cancelGeneration: () => void;
 
   // Gallery
   gallery: GalleryItem[];
   hasMore: boolean;
   loadingMore: boolean;
   loadMore: () => void;
-  generatedAssetRetentionDays: number | null;
   previewItem: GalleryItem | null;
   setPreviewItem: (item: GalleryItem | null) => void;
   deleteGalleryItem: (id: string) => void;
@@ -242,8 +242,6 @@ export function useStudio(): StudioContextValue {
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 export function StudioProvider({ children }: { children: ReactNode }) {
-  // Media type & mode
-  const [mediaType, setMediaType] = useState<MediaType>('image');
   const [imageMode, setImageMode] = useState<ImageMode>('text2img');
 
   // Group shelf（分组货架）
@@ -266,15 +264,12 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   // Generation
   const [isGenerating, setIsGenerating] = useState(false);
   const [tasks, setTasks] = useState<StudioGenerationTask[]>([]);
-  const abortRef = useRef<AbortController | null>(null);
 
   // Gallery
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
   const [previewItem, setPreviewItem] = useState<GalleryItem | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  // 独立部署：产物存本地磁盘、无保留期策略（原 core 的 asset_retention 设置已不适用）
-  const generatedAssetRetentionDays: number | null = null;
   const galleryOffsetRef = useRef(0);
 
   const recoveryPromiseRef = useRef<Promise<void> | null>(null);
@@ -285,7 +280,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     if (found) return found;
     return toImageModel(selectedModelId || '');
   }, [models, selectedModelId]);
-  const selectedPlatform = currentModel.protocols[0] ?? '';
 
   const setSelectedModelId = useCallback((id: string) => {
     setSelectedModelIdRaw(id);
@@ -343,7 +337,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     api.listModels(groupMode ? selectedGroupId : undefined)
       .then(list => {
         if (cancelled) return;
-        const imageModels = (groupMode ? list : list.filter(m => isLikelyImageModel(m.id)))
+        // 分组模式按货架 modality 过滤（当前创作中心只有图像模式；空值视为未标注放行）；
+        // 零配置模式沿用模型名启发式过滤。
+        const imageModels = (groupMode
+          ? list.filter(m => !m.modality || m.modality === 'image')
+          : list.filter(m => isLikelyImageModel(m.id)))
           .map(m => {
             const model = toImageModel(m.id, m.protocols);
             return m.display_name ? { ...model, name: m.display_name } : model;
@@ -363,25 +361,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const PAGE_SIZE = 20;
 
   function tasksToGallery(taskList: GenerationTask[]): GalleryItem[] {
-    const items: GalleryItem[] = [];
-    for (const t of taskList) {
-      if (t.status !== 'completed' || !t.result_content) continue;
-      for (const img of parseMarkdownImages(t.result_content)) {
-        items.push({
-          id: uid(),
-          taskId: t.id,
-          url: img.url,
-          alt: img.alt,
-          prompt: t.prompt,
-          model: t.model ?? '',
-          mode: operationToImageMode(t.operation ?? 'generate'),
-          size: taskSize(t),
-          createdAt: taskAssetCreatedAt(t),
-          sourceUrl: taskSourceUrl(t),
-        });
-      }
-    }
-    return items;
+    return taskList
+      .filter(t => t.status === 'completed')
+      .flatMap(t => taskGalleryItems(t));
   }
 
   const recoverTasks = useCallback(async (signal: AbortSignal) => {
@@ -436,22 +418,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         pollGenerationTask(t.id, signal)
           .then(done => {
             if (signal.aborted) return;
-            const imgs = parseMarkdownImages(done.result_content || '');
-            setGallery(prev => [
-              ...imgs.map(img => ({
-                id: uid(),
-                taskId: t.id,
-                url: img.url,
-                alt: img.alt,
-                prompt: t.prompt,
-                model: t.model ?? '',
-                mode: operationToImageMode(t.operation ?? 'generate'),
-                size: taskSize(done),
-                createdAt: taskAssetCreatedAt(done),
-                sourceUrl: taskSourceUrl(done),
-              })),
-              ...prev,
-            ]);
+            setGallery(prev => [...taskGalleryItems(done), ...prev]);
             setTasks(prev =>
               prev.map(gt =>
                 gt.id === taskUiId ? { ...gt, status: 'completed' } : gt,
@@ -517,23 +484,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         if (!remoteId) return;
         try {
           const remote = await api.getGenerationTask(remoteId);
-          if (remote.status === 'completed' && remote.result_content) {
-            const imgs = parseMarkdownImages(remote.result_content);
-            setGallery(prev => [
-              ...imgs.map(img => ({
-                id: uid(),
-                taskId: remoteId,
-                url: img.url,
-                alt: img.alt,
-                prompt: remote.prompt,
-                model: remote.model ?? '',
-                mode: operationToImageMode(remote.operation ?? 'generate'),
-                size: taskSize(remote),
-                createdAt: taskAssetCreatedAt(remote),
-                sourceUrl: taskSourceUrl(remote),
-              })),
-              ...prev,
-            ]);
+          if (remote.status === 'completed' && remote.images?.length) {
+            setGallery(prev => [...taskGalleryItems(remote), ...prev]);
             setTasks(prev => prev.map(gt => gt.id === uiTask.id ? { ...gt, status: 'completed' } : gt));
           } else if (remote.status === 'failed') {
             setTasks(prev => prev.map(gt => gt.id === uiTask.id
@@ -556,10 +508,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }, [tasks]);
 
   // ── Generation ────────────────────────────────────────────────────────────
-
-  const cancelGeneration = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
 
   const activeCountRef = useRef(0);
 
@@ -591,7 +539,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         mode,
         status: 'queued',
         createdAt: now,
-        platform: selectedPlatform,
         model: selectedModelId,
         size: imageSize,
         remoteTaskIds: [],
@@ -618,7 +565,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
               const created = await api.createGenerationTask({
                 kind: 'image',
                 operation: 'generate',
-                platform: selectedPlatform,
                 model: selectedModelId,
                 prompt: p,
                 ...(groups.length > 0 && selectedGroupId > 0 ? { group_id: selectedGroupId } : {}),
@@ -627,34 +573,13 @@ export function StudioProvider({ children }: { children: ReactNode }) {
               remoteTaskIds.push(created.id);
               updateTask({ remoteTaskIds: [...remoteTaskIds] });
               const completed = await pollGenerationTask(created.id, signal);
-              return parseMarkdownImages(completed.result_content || '').map(img => ({
-                ...img,
-                prompt: p,
-                taskId: created.id,
-                createdAt: taskAssetCreatedAt(completed),
-              }));
+              return taskGalleryItems(completed, { prompt: p, model: selectedModelId, mode, size: imageSize });
             });
 
             const settled = await Promise.allSettled(batchTasks);
-
-            const allItems: GalleryItem[] = [];
-            for (const outcome of settled) {
-              if (outcome.status === 'fulfilled') {
-                for (const img of outcome.value) {
-                  allItems.push({
-                    id: uid(),
-                    taskId: img.taskId,
-                    url: img.url,
-                    alt: img.alt,
-                    prompt: img.prompt,
-                    model: selectedModelId,
-                    mode,
-                    size: imageSize,
-                    createdAt: img.createdAt,
-                  });
-                }
-              }
-            }
+            const allItems: GalleryItem[] = settled
+              .filter(o => o.status === 'fulfilled')
+              .flatMap(o => o.value);
 
             if (allItems.length === 0) throw new Error('Batch generation: all tasks failed');
 
@@ -666,7 +591,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
             const taskData: Parameters<typeof api.createGenerationTask>[0] = {
               kind: 'image',
               operation: modeToOperation(mode),
-              platform: selectedPlatform,
               model: selectedModelId,
               prompt,
               ...(groups.length > 0 && selectedGroupId > 0 ? { group_id: selectedGroupId } : {}),
@@ -702,25 +626,16 @@ export function StudioProvider({ children }: { children: ReactNode }) {
             if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
             updateTask({ remoteTaskIds: [created.id] });
             const completed = await pollGenerationTask(created.id, signal);
-            const images = parseMarkdownImages(completed.result_content || '');
 
-            const galleryItems: GalleryItem[] = images.map(img => ({
-              id: uid(),
-              taskId: created.id,
-              url: img.url,
-              alt: img.alt,
-              prompt,
+            const galleryItems = taskGalleryItems(completed, {
               model: selectedModelId,
               mode,
               size: imageSize,
-              createdAt: taskAssetCreatedAt(completed),
-              // GalleryItem.sourceUrl is single-valued; record the first source
-              // so "regenerate" can seed at least one reference. Multi-ref recall
-              // would need a schema change to GalleryItem.
+              // sourceUrl 单值；记录首个参考图供「重新生成」回填（多参考需改 GalleryItem 结构）。
               sourceUrl: (mode === 'img2img' || mode === 'inpaint')
                 ? (options?.sourceImage ?? options?.sourceImages?.[0] ?? referenceImages[0] ?? undefined)
                 : undefined,
-            }));
+            });
 
             setGallery(prev => [...galleryItems, ...prev]);
             updateTask({ status: 'completed', result: galleryItems, remoteTaskIds: [created.id] });
@@ -751,7 +666,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       imageSize,
       referenceImages,
       selectedGroupId,
-      selectedPlatform,
       selectedModelId,
     ],
   );
@@ -817,8 +731,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   // ── Context value ─────────────────────────────────────────────────────────
 
   const value: StudioContextValue = {
-    mediaType,
-    setMediaType,
     imageMode,
     setImageMode,
     groups,
@@ -829,7 +741,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     currentModel,
     selectedModelId,
     setSelectedModelId,
-    selectedPlatform,
     imageSize,
     setImageSize,
     imageQuality,
@@ -839,12 +750,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     isGenerating,
     tasks,
     generate,
-    cancelGeneration,
     gallery,
     hasMore,
     loadingMore,
     loadMore,
-    generatedAssetRetentionDays,
     previewItem,
     setPreviewItem,
     deleteGalleryItem,

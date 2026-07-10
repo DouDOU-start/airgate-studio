@@ -95,25 +95,30 @@ func (s *Server) handleUserInfo(w http.ResponseWriter, r *http.Request, user *Us
 func (s *Server) handleCreateGenerationTask(w http.ResponseWriter, r *http.Request, user *User) {
 	var req createGenerationTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	normalizeGenerationRequest(&req)
 
+	if !supportedKinds[req.Kind] {
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("暂不支持的生成类型: %s（视频/音乐等模态将在后续版本开放）", req.Kind))
+		return
+	}
 	if req.Prompt == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt is required"})
+		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
 	if req.Model == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model is required"})
+		writeError(w, http.StatusBadRequest, "model is required")
 		return
 	}
 
 	// 分组模式：校验分组已开放、模型已上架、用户持有该组 key（体验优化；
 	// 硬约束在 core——即使绕过这里，key 权限与计费也由 core 兜底）。
 	if req.GroupID > 0 {
-		if err := s.validateShelfSelection(r.Context(), user, req.GroupID, req.Model); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		if err := s.validateShelfSelection(r.Context(), user, req.GroupID, req.Model, req.Kind); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
@@ -126,7 +131,7 @@ func (s *Server) handleCreateGenerationTask(w http.ResponseWriter, r *http.Reque
 	}
 	if err := s.tasks.Create(r.Context(), task); err != nil {
 		s.logger.Error("create_generation_task_failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "创建任务失败: " + err.Error()})
+		writeError(w, http.StatusInternalServerError, "创建任务失败: "+err.Error())
 		return
 	}
 
@@ -136,17 +141,17 @@ func (s *Server) handleCreateGenerationTask(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleGetGenerationTask(w http.ResponseWriter, r *http.Request, user *User) {
 	taskID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || taskID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid task_id"})
+		writeError(w, http.StatusBadRequest, "invalid task_id")
 		return
 	}
 
 	task, err := s.tasks.GetByID(r.Context(), user.ID, taskID)
 	if errors.Is(err, ErrTaskNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "任务不存在"})
+		writeError(w, http.StatusNotFound, "任务不存在")
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询任务失败: " + err.Error()})
+		writeError(w, http.StatusInternalServerError, "查询任务失败: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, buildGenerationTaskResponse(task))
@@ -155,7 +160,7 @@ func (s *Server) handleGetGenerationTask(w http.ResponseWriter, r *http.Request,
 func (s *Server) handleDeleteGenerationTask(w http.ResponseWriter, r *http.Request, user *User) {
 	taskID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || taskID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid task_id"})
+		writeError(w, http.StatusBadRequest, "invalid task_id")
 		return
 	}
 
@@ -166,16 +171,15 @@ func (s *Server) handleDeleteGenerationTask(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "删除任务失败: " + err.Error()})
+		writeError(w, http.StatusInternalServerError, "删除任务失败: "+err.Error())
 		return
 	}
 
-	// 同步清理产物文件；失败仅记日志，不影响删除结果。
-	if task.Output != nil {
-		for _, u := range stringSliceFromAny(task.Output["images"]) {
-			if err := s.assets.Delete(u); err != nil {
-				s.logger.Warn("delete_asset_failed", "task_id", task.ID, "url", u, "error", err)
-			}
+	// 同步清理产物文件（images + assets 去重合并，覆盖未来视频/音频产物）；
+	// 失败仅记日志，不影响删除结果。
+	for _, u := range outputAssetURLs(task.Output) {
+		if err := s.assets.Delete(u); err != nil {
+			s.logger.Warn("delete_asset_failed", "task_id", task.ID, "url", u, "error", err)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -194,7 +198,7 @@ func (s *Server) handleListGenerationTasks(w http.ResponseWriter, r *http.Reques
 
 	tasks, total, err := s.tasks.List(r.Context(), user.ID, status, limit, offset)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询任务列表失败: " + err.Error()})
+		writeError(w, http.StatusInternalServerError, "查询任务列表失败: "+err.Error())
 		return
 	}
 
@@ -207,8 +211,8 @@ func (s *Server) handleListGenerationTasks(w http.ResponseWriter, r *http.Reques
 
 // ==================== 分组与模型 ====================
 
-// validateShelfSelection 校验「分组已开放 + 模型已上架 + 用户持有该组 key」。
-func (s *Server) validateShelfSelection(ctx context.Context, user *User, groupID int64, model string) error {
+// validateShelfSelection 校验「分组已开放 + 模型已上架 + 模态匹配 + 用户持有该组 key」。
+func (s *Server) validateShelfSelection(ctx context.Context, user *User, groupID int64, model, kind string) error {
 	groups, err := s.shelf.ListGroups(ctx, true)
 	if err != nil {
 		return fmt.Errorf("查询分组失败: %w", err)
@@ -233,6 +237,11 @@ func (s *Server) validateShelfSelection(ctx context.Context, user *User, groupID
 	if !m.Enabled {
 		return fmt.Errorf("该模型未上架")
 	}
+	// 模态与请求类型对齐（kind 与 modality 同词表：image/video/music）；
+	// 空 modality 视为未标注，不拦截。
+	if m.Modality != "" && m.Modality != kind {
+		return fmt.Errorf("模型 %s 的模态为 %s，不能用于 %s 生成", model, m.Modality, kind)
+	}
 	keys, err := s.users.KeysByUser(ctx, user.ID)
 	if err != nil {
 		return fmt.Errorf("查询用户分组 key 失败: %w", err)
@@ -248,12 +257,12 @@ func (s *Server) validateShelfSelection(ctx context.Context, user *User, groupID
 func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request, user *User) {
 	groups, err := s.shelf.ListGroups(r.Context(), true)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询分组失败: " + err.Error()})
+		writeError(w, http.StatusInternalServerError, "查询分组失败: "+err.Error())
 		return
 	}
 	keys, err := s.users.KeysByUser(r.Context(), user.ID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询分组 key 失败: " + err.Error()})
+		writeError(w, http.StatusInternalServerError, "查询分组 key 失败: "+err.Error())
 		return
 	}
 	items := make([]map[string]any, 0, len(groups))
@@ -277,12 +286,12 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request, user *
 	if raw := r.URL.Query().Get("group_id"); raw != "" {
 		groupID, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || groupID <= 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid group_id"})
+			writeError(w, http.StatusBadRequest, "invalid group_id")
 			return
 		}
 		models, err := s.shelf.ListModels(r.Context(), groupID, true)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询货架模型失败: " + err.Error()})
+			writeError(w, http.StatusInternalServerError, "查询货架模型失败: "+err.Error())
 			return
 		}
 		items := make([]map[string]any, 0, len(models))
@@ -295,6 +304,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request, user *
 				"id":           m.ModelName,
 				"display_name": display,
 				"protocols":    m.Protocols,
+				"modality":     m.Modality,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": items})
@@ -302,14 +312,14 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request, user *
 	}
 
 	if user.APIKey == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "没有可用的 API Key，请重新登录"})
+		writeError(w, http.StatusForbidden, "没有可用的 API Key，请重新登录")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	body, status, err := s.core.ListModels(ctx, user.APIKey)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "查询模型列表失败: " + err.Error()})
+		writeError(w, http.StatusBadGateway, "查询模型列表失败: "+err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -321,4 +331,9 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
+}
+
+// writeError 统一错误响应形态 {"error": msg}。
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }

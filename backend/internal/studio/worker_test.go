@@ -187,8 +187,12 @@ func TestWorkerRunOnceCompletesTask(t *testing.T) {
 	if got.Output["model"] != "gpt-image-2-0709" {
 		t.Fatalf("output.model = %v", got.Output["model"])
 	}
-	if content, _ := got.Output["content"].(string); !strings.Contains(content, images[0]) {
-		t.Fatalf("output.content 应包含图片 markdown，got %q", content)
+	assets, _ := got.Output["assets"].([]any)
+	if len(assets) != 1 {
+		t.Fatalf("output.assets = %#v，应为单元素统一产物形态", got.Output["assets"])
+	}
+	if a, _ := assets[0].(map[string]any); a["type"] != "image" || a["url"] != images[0] {
+		t.Fatalf("output.assets[0] = %#v", assets[0])
 	}
 	// 请求装配检查：单条 user 消息，parts = text + 无输入图
 	if len(core.requests) != 1 {

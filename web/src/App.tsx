@@ -1,8 +1,8 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { cssVar } from '@doudou-start/airgate-theme';
-import { api, type UserInfo } from './api';
-import StudioPage from './StudioPage';
-import { UserBar } from './UserBar';
+import { api, type UserInfo } from './lib/api';
+import { StudioView } from './studio/StudioView';
+import { UserBar } from './components/UserBar';
 
 const bootStyles: Record<string, CSSProperties> = {
   screen: {
@@ -78,7 +78,7 @@ export default function App() {
 
   return (
     <>
-      <StudioPage />
+      <StudioView />
       <UserBar user={user} />
     </>
   );

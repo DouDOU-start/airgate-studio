@@ -80,10 +80,23 @@ func (s *memShelfStore) SyncModels(_ context.Context, coreGroupID int64, models 
 		}
 	}
 	for _, m := range models {
+		modality := m.Modality
+		if modality == "" {
+			modality = modalityImage
+		}
+		// 与 pg 实现同契约：protocols 归一为非 nil；modality 的 'image' 视为
+		// 未定制，同步时允许提升，其余人工值不覆盖。
+		protocols := m.Protocols
+		if protocols == nil {
+			protocols = []string{}
+		}
 		key := shelfKey(coreGroupID, m.ModelName)
 		if id, ok := s.modelKey[key]; ok {
 			existing := s.models[id]
-			existing.Protocols = m.Protocols
+			existing.Protocols = protocols
+			if existing.Modality == modalityImage {
+				existing.Modality = modality
+			}
 			existing.MissingAtCore = false
 			existing.SyncedAt = time.Now()
 			continue
@@ -91,7 +104,7 @@ func (s *memShelfStore) SyncModels(_ context.Context, coreGroupID int64, models 
 		s.nextID++
 		s.models[s.nextID] = &ShelfModel{
 			ID: s.nextID, CoreGroupID: coreGroupID, ModelName: m.ModelName,
-			Protocols: m.Protocols, SyncedAt: time.Now(),
+			Protocols: protocols, Modality: modality, SyncedAt: time.Now(),
 		}
 		s.modelKey[key] = s.nextID
 	}
@@ -139,6 +152,9 @@ func (s *memShelfStore) UpdateModel(_ context.Context, id int64, patch ShelfMode
 	}
 	if patch.DisplayName != nil {
 		m.DisplayName = *patch.DisplayName
+	}
+	if patch.Modality != nil {
+		m.Modality = *patch.Modality
 	}
 	if patch.Enabled != nil {
 		m.Enabled = *patch.Enabled

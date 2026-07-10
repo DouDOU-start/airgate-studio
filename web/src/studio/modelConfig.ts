@@ -76,7 +76,7 @@ export function isLikelyImageModel(id: string): boolean {
 }
 
 /** 协议启发式兜底（镜像后端 guessProtocolsByModelName）：目录没给 protocols 时按前缀猜。 */
-export function guessProtocolsByModelName(id: string): string[] {
+function guessProtocolsByModelName(id: string): string[] {
   const name = bareModelName(id);
   if (name.startsWith('imagen') || name.startsWith('gemini') || name.startsWith('veo')) {
     return ['gemini'];
@@ -224,6 +224,3 @@ export function toImageModel(id: string, protocols?: string[]): ImageModel {
   return { id, name: id, protocols: proto, caps: modelCapabilities(id, proto) };
 }
 
-export function getSizeOption(sizes: SizeOption[], sizeValue: string): SizeOption | undefined {
-  return sizes.find(s => s.value === sizeValue);
-}

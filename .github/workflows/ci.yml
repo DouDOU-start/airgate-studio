@@ -23,8 +23,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: 构建前端
-        run: cd web && pnpm install --frozen-lockfile && pnpm run build
+      # 只装依赖；前端构建由 make ci 的 build → sync-webdist 统一执行，避免重复构建
+      - name: 安装前端依赖
+        run: cd web && pnpm install --frozen-lockfile
 
       - uses: actions/setup-go@v5
         with:

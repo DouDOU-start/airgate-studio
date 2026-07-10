@@ -101,22 +101,26 @@ func TestBuildGenerationTaskResponseMapsOutput(t *testing.T) {
 			"operation": "generate",
 		},
 		Output: map[string]interface{}{
-			"content": "![generated image](/assets-runtime/generated/abc.png)",
-			"images":  []interface{}{"/assets-runtime/generated/abc.png"},
-			"model":   "gpt-image-2-0709",
-			"usage":   map[string]interface{}{"total_tokens": float64(120)},
+			"images": []interface{}{"/assets-runtime/generated/abc.png"},
+			"model":  "gpt-image-2-0709",
+			"usage":  map[string]interface{}{"total_tokens": float64(120)},
 		},
 		CreatedAt:   time.Date(2026, 7, 1, 8, 59, 0, 0, time.UTC),
 		CompletedAt: &done,
 	}
 
 	resp := buildGenerationTaskResponse(task)
-	if got := resp["result_content"]; got != "![generated image](/assets-runtime/generated/abc.png)" {
-		t.Fatalf("result_content = %v", got)
-	}
 	images, ok := resp["images"].([]string)
 	if !ok || len(images) != 1 || images[0] != "/assets-runtime/generated/abc.png" {
 		t.Fatalf("images = %#v", resp["images"])
+	}
+	// 存量任务（output 无 assets）应从 images 派生统一产物形态
+	assets, ok := resp["assets"].([]any)
+	if !ok || len(assets) != 1 {
+		t.Fatalf("assets = %#v", resp["assets"])
+	}
+	if a, _ := assets[0].(map[string]any); a["type"] != "image" || a["url"] != "/assets-runtime/generated/abc.png" {
+		t.Fatalf("assets[0] = %#v", assets[0])
 	}
 	// output.model 优先于 input.model
 	if got := resp["model"]; got != "gpt-image-2-0709" {

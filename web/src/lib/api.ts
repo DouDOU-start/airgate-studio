@@ -33,8 +33,6 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export interface GenerationTask {
   id: number;
-  task_id: number;
-  public_task_id?: string;
   status: string;
   progress: number;
   prompt: string;
@@ -44,11 +42,12 @@ export interface GenerationTask {
   quality?: string;
   input_images?: string[];
   input_mask?: string;
-  result_content?: string;
+  /** 产物图片 URL 列表（画廊消费）。 */
   images?: string[];
+  /** 统一产物形态；视频/音乐模态就绪后画廊按 type 渲染。 */
+  assets?: GeneratedAsset[];
   error_message?: string;
   created_at: string;
-  updated_at?: string;
   completed_at?: string;
 }
 
@@ -60,6 +59,18 @@ export interface ModelInfo {
   protocols?: string[];
   /** 分组货架模式：管理员配置的展示名（缺省同 id）。 */
   display_name?: string;
+  /** 模型模态（image/video/music）；前端按此归类创作模式，当前仅 image 可创建任务。 */
+  modality?: string;
+}
+
+/**
+ * 统一产物形态；视频/音乐模态就绪后画廊按 type 渲染对应播放器。
+ * type 是「产物文件类型」词表（audio），与模型 modality 词表（music）刻意区分——
+ * 音乐模型的产物是 audio 文件。
+ */
+export interface GeneratedAsset {
+  type: 'image' | 'video' | 'audio' | string;
+  url: string;
 }
 
 export interface UserInfo {
@@ -99,6 +110,7 @@ export interface AdminModel {
   model_name: string;
   display_name: string;
   protocols: string[];
+  modality: string;
   enabled: boolean;
   sort_order: number;
   missing_at_core: boolean;
@@ -121,7 +133,6 @@ export const api = {
   createGenerationTask(params: {
     kind: string;
     operation: string;
-    platform: string;
     model: string;
     prompt: string;
     group_id?: number;
@@ -181,7 +192,7 @@ export const api = {
     return request<{ models?: AdminModel[] }>('GET', `/admin/models?group_id=${coreGroupID}`).then(r => r.models || []);
   },
 
-  adminUpdateModel(id: number, patch: { display_name?: string; enabled?: boolean; sort_order?: number }): Promise<AdminModel> {
+  adminUpdateModel(id: number, patch: { display_name?: string; modality?: string; enabled?: boolean; sort_order?: number }): Promise<AdminModel> {
     return request('PUT', `/admin/models/${id}`, patch);
   },
 };

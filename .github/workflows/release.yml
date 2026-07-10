@@ -59,7 +59,7 @@ jobs:
         run: |
           mkdir -p bin
           cd backend && go build -buildvcs=false -trimpath \
-            -o ../bin/airgate-studio-${{ matrix.goos }}-${{ matrix.goarch }} .
+            -o ../bin/airgate-studio-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/airgate-studio
 
       - name: 生成 SHA256
         run: |

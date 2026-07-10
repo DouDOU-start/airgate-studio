@@ -13,10 +13,8 @@
   },
   "dependencies": {
     "@doudou-start/airgate-theme": "https://github.com/DouDOU-start/airgate-sdk/releases/download/v0.2.0/airgate-theme-v0.2.0.tgz",
-    "i18next": "^26.0.6",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-i18next": "^17.0.4"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

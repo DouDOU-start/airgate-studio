@@ -4,7 +4,7 @@ GO := GOTOOLCHAIN=local go
 
 WEBDIST := backend/internal/studio/webdist
 
-.PHONY: help install dev build build-web sync-webdist ensure-webdist ci pre-commit lint type-check test vet fmt setup-hooks clean
+.PHONY: help install dev dev-backend dev-web build build-web sync-webdist ensure-webdist ci pre-commit lint type-check test vet fmt setup-hooks clean
 
 help: ## 显示帮助信息
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -18,7 +18,7 @@ install: ## 安装前后端依赖
 
 build: sync-webdist ## 完整构建：前端 → 嵌入后端 → 编译单二进制
 	mkdir -p bin
-	cd backend && GOWORK=off $(GO) build -o ../bin/airgate-studio .
+	cd backend && GOWORK=off $(GO) build -o ../bin/airgate-studio ./cmd/airgate-studio
 	@echo "构建完成: bin/airgate-studio"
 
 build-web: ## 构建前端 SPA
@@ -50,12 +50,12 @@ dev: ## 本地开发：后端 go run（:8181，读 backend/config.yaml）+ 前�
 		exit 1; \
 	fi
 	@trap 'kill 0' EXIT; \
-	(cd backend && GOWORK=off $(GO) run .) & \
+	(cd backend && GOWORK=off $(GO) run ./cmd/airgate-studio) & \
 	(cd web && pnpm dev --host) & \
 	wait
 
 dev-backend: ## 仅后端（读 backend/config.yaml；env 可覆盖单项）
-	cd backend && GOWORK=off $(GO) run .
+	cd backend && GOWORK=off $(GO) run ./cmd/airgate-studio
 
 dev-web: ## 仅前端 vite dev server（--host 允许非本机 IP 访问）
 	cd web && pnpm dev --host

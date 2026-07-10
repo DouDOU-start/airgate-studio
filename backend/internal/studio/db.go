@@ -76,6 +76,7 @@ var migrations = []string{
 		model_name TEXT NOT NULL,
 		display_name TEXT NOT NULL DEFAULT '',
 		protocols JSONB NOT NULL DEFAULT '[]'::jsonb,
+		modality TEXT NOT NULL DEFAULT 'image',
 		enabled BOOLEAN NOT NULL DEFAULT FALSE,
 		sort_order INT NOT NULL DEFAULT 0,
 		missing_at_core BOOLEAN NOT NULL DEFAULT FALSE,
@@ -84,6 +85,8 @@ var migrations = []string{
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 		UNIQUE (core_group_id, model_name)
 	)`,
+	// 存量部署补列：模型模态（image/video/music），同步时按模型名启发式预填。
+	`ALTER TABLE studio_models ADD COLUMN IF NOT EXISTS modality TEXT NOT NULL DEFAULT 'image'`,
 	// 用户按分组领取的 sk- key（登录回调自动 provision；仅后端持有）。
 	`CREATE TABLE IF NOT EXISTS studio_user_keys (
 		user_id BIGINT NOT NULL,

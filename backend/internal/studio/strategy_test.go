@@ -77,6 +77,33 @@ func TestGuessProtocolsByModelName(t *testing.T) {
 	}
 }
 
+func TestGuessModalityByModelName(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{"gpt-image-1", modalityImage},
+		{"imagen-4.0-generate-001", modalityImage},
+		{"gemini-2.5-flash-image", modalityImage},
+		{"veo-3", modalityVideo},
+		{"google/veo-3.1", modalityVideo},
+		{"sora-2", modalityVideo},
+		{"kling-v2", modalityVideo},
+		// "wan" 前缀有歧义（wan2.x 视频 / wanx-t2i 文生图），不猜、默认 image
+		{"wanx2.1-t2i-turbo", modalityImage},
+		{"suno-v5", modalityMusic},
+		{"lyria-2", modalityMusic},
+		{"unknown-model", modalityImage},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := guessModalityByModelName(tt.model); got != tt.want {
+				t.Fatalf("guessModalityByModelName(%q) = %s, want %s", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 // ==================== 目录缓存 ====================
 
 // fakeLister modelProtocolLister 的脚本化假实现。

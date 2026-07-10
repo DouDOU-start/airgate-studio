@@ -1,7 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { injectThemeStyle, setTheme, getStoredTheme } from '@doudou-start/airgate-theme';
-import './i18n';
 import App from './App';
 
 // 独立 SPA：主题 CSS 变量由本应用自行注入（插件时代由 core 壳层提供）。

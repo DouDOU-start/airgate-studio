@@ -100,6 +100,43 @@ func guessProtocolsByModelName(model string) []string {
 	}
 }
 
+// ==================== 模型模态启发式 ====================
+
+// 模型模态取值（studio_models.modality）。core 目录暂不声明模态，
+// 同步时按模型名启发式预填，管理员可在货架上改；前端按模态归类创作模式。
+const (
+	modalityImage = "image"
+	modalityVideo = "video"
+	modalityMusic = "music"
+)
+
+// knownModalities 货架 modality 字段的合法取值（管理端编辑校验用）。
+var knownModalities = map[string]bool{
+	modalityImage: true,
+	modalityVideo: true,
+	modalityMusic: true,
+}
+
+// guessModalityByModelName 按模型名前缀猜模态；不认识的默认 image
+// （当前创作中心只有图像模式，误判可由管理员在货架上纠正）。
+// 注意：只收录无歧义前缀——如 "wan" 同时匹配万相视频（wan2.x）与
+// 文生图（wanx-t2i），不做猜测，交由管理员标注。
+func guessModalityByModelName(model string) string {
+	name := bareModelName(model)
+	switch {
+	case strings.HasPrefix(name, "veo"),
+		strings.HasPrefix(name, "sora"),
+		strings.HasPrefix(name, "kling"):
+		return modalityVideo
+	case strings.HasPrefix(name, "suno"),
+		strings.HasPrefix(name, "lyria"),
+		strings.HasPrefix(name, "music"):
+		return modalityMusic
+	default:
+		return modalityImage
+	}
+}
+
 // ==================== model → protocols 目录缓存 ====================
 
 // modelProtocolLister 供 protocolCatalog 拉取 core /v1/models 的 model→protocols 目录。

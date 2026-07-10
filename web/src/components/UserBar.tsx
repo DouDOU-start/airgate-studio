@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from 'react';
 import { cssVar } from '@doudou-start/airgate-theme';
-import { api, type UserInfo } from './api';
+import { api, type UserInfo } from '../lib/api';
 import { AdminPanel } from './AdminPanel';
 
 const styles: Record<string, CSSProperties> = {
@@ -76,26 +76,30 @@ export function UserBar({ user }: { user: UserInfo }) {
     }
   };
 
+  // AdminPanel 必须放在 bar 外层：bar 的 backdrop-filter 会为后代 fixed 元素
+  // 创建包含块，弹层若嵌在内部会被钉死在胶囊条范围内（表现为黑块/黑屏）。
   return (
-    <div style={styles.bar}>
-      <span style={styles.username} title={user.email || user.username}>
-        {user.username || user.email || `用户 #${user.airgate_user_id}`}
-      </span>
-      {balanceLabel && <span style={styles.balance} title="可用余额">{balanceLabel}</span>}
-      {!user.api_key_ready && (
-        <span style={{ ...styles.balance, color: cssVar('danger') }} title="未能领取 API Key，生成任务将失败">
-          Key 不可用
+    <>
+      <div style={styles.bar}>
+        <span style={styles.username} title={user.email || user.username}>
+          {user.username || user.email || `用户 #${user.airgate_user_id}`}
         </span>
-      )}
-      {user.is_admin && (
-        <button type="button" style={styles.logout} className="studio-gallery-action" onClick={() => setAdminOpen(true)}>
-          管理
+        {balanceLabel && <span style={styles.balance} title="可用余额">{balanceLabel}</span>}
+        {!user.api_key_ready && (
+          <span style={{ ...styles.balance, color: cssVar('danger') }} title="未能领取 API Key，生成任务将失败">
+            Key 不可用
+          </span>
+        )}
+        {user.is_admin && (
+          <button type="button" style={styles.logout} className="studio-gallery-action" onClick={() => setAdminOpen(true)}>
+            管理
+          </button>
+        )}
+        <button type="button" style={styles.logout} className="studio-gallery-action" onClick={handleLogout}>
+          {loggingOut ? '退出中...' : '退出'}
         </button>
-      )}
-      <button type="button" style={styles.logout} className="studio-gallery-action" onClick={handleLogout}>
-        {loggingOut ? '退出中...' : '退出'}
-      </button>
+      </div>
       {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
-    </div>
+    </>
   );
 }

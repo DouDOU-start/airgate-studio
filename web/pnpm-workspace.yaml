@@ -1,2 +1,4 @@
+# 非多包 workspace——此文件仅承载 pnpm 的构建脚本白名单配置：
+# 允许 esbuild 的 postinstall 构建（vite 依赖），删除会导致安装时 esbuild 不可用。
 allowBuilds:
   esbuild: true

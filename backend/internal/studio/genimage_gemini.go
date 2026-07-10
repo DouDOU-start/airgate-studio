@@ -152,7 +152,7 @@ func buildGeminiContentPayload(ctx context.Context, input map[string]any, loadIm
 		}
 		parts = append(parts, map[string]any{
 			"inlineData": map[string]any{
-				"mimeType": mimeFromExt(extFromMIME(mime)),
+				"mimeType": canonicalImageMIME(mime),
 				"data":     base64.StdEncoding.EncodeToString(data),
 			},
 		})

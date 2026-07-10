@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { cssVar } from '@doudou-start/airgate-theme';
-import { api, type AdminGroup, type AdminModel } from './api';
+import { api, type AdminGroup, type AdminModel } from '../lib/api';
 
 // AdminPanel：管理控制台弹层——分组开关 + 按组同步/上架模型。
 // 分组镜像来自管理员登录时自动收集（core userinfo.groups）；
@@ -218,7 +218,7 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const patchModel = async (m: AdminModel, patch: { display_name?: string; enabled?: boolean; sort_order?: number }) => {
+  const patchModel = async (m: AdminModel, patch: { display_name?: string; modality?: string; enabled?: boolean; sort_order?: number }) => {
     setError('');
     try {
       const updated = await api.adminUpdateModel(m.id, patch);
@@ -278,6 +278,7 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
                   <th style={{ ...s.th, width: 60 }}>上架</th>
                   <th style={s.th}>模型</th>
                   <th style={{ ...s.th, width: 220 }}>展示名</th>
+                  <th style={{ ...s.th, width: 90 }}>模态</th>
                   <th style={{ ...s.th, width: 90 }}>协议</th>
                 </tr>
               </thead>
@@ -302,12 +303,23 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
                         }}
                       />
                     </td>
-                    <td style={{ ...s.td, fontSize: 10, color: cssVar('textTertiary') }}>{m.protocols.join('/')}</td>
+                    <td style={s.td}>
+                    <select
+                      style={{ ...s.nameInput, width: 'auto', cursor: 'pointer' }}
+                      value={m.modality || 'image'}
+                      onChange={e => void patchModel(m, { modality: e.target.value })}
+                    >
+                      <option value="image">图像</option>
+                      <option value="video">视频</option>
+                      <option value="music">音乐</option>
+                    </select>
+                  </td>
+                  <td style={{ ...s.td, fontSize: 10, color: cssVar('textTertiary') }}>{(m.protocols ?? []).join('/')}</td>
                   </tr>
                 ))}
                 {models.length === 0 && (
                   <tr>
-                    <td style={s.td} colSpan={4}>
+                    <td style={s.td} colSpan={5}>
                       <span style={s.hint}>暂无模型，点击「从 core 同步模型」拉取该分组可用模型</span>
                     </td>
                   </tr>
