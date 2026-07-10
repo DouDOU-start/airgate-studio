@@ -163,15 +163,14 @@ export const api = {
 
   // ── 分组与模型 ────────────────────────────────────────────────────────────
 
-  /** 已开放分组列表；空列表 = 未启用分组模式（回退全量模型透传）。 */
+  /** 已开放分组列表；空列表 = 管理员尚未开放任何分组（无模型可用）。 */
   listGroups(): Promise<GroupOption[]> {
     return request<{ groups?: GroupOption[] }>('GET', '/groups').then(r => r.groups || []);
   },
 
-  // 带 group_id → 分组货架（已上架模型）；不带 → 透传 core /v1/models（零配置兼容）。
-  listModels(groupId?: number): Promise<ModelInfo[]> {
-    const suffix = groupId && groupId > 0 ? `?group_id=${groupId}` : '';
-    return request<{ data?: ModelInfo[] }>('GET', `/models${suffix}`).then(r => r.data || []);
+  /** 该分组已上架的货架模型（模型供给只有货架一条路，group_id 必填）。 */
+  listModels(groupId: number): Promise<ModelInfo[]> {
+    return request<{ data?: ModelInfo[] }>('GET', `/models?group_id=${groupId}`).then(r => r.data || []);
   },
 
   // ── 管理端（管理员白名单可见） ────────────────────────────────────────────

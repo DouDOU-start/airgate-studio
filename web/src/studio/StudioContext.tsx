@@ -11,7 +11,7 @@ import {
 import { api } from '../lib/api';
 import type { GenerationTask, GroupOption } from '../lib/api';
 import type { GalleryItem, StudioGenerationTask, ImageMode } from './types';
-import { isLikelyImageModel, toImageModel, type ImageModel } from './modelConfig';
+import { toImageModel, type ImageModel } from './modelConfig';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -193,7 +193,7 @@ export interface StudioContextValue {
   selectedGroupId: number;
   setSelectedGroupId: (id: number) => void;
 
-  // Model registry（分组模式读货架；否则 /api/models 图像模型过滤 + 手动输入兜底）
+  // Model registry（只来自分组货架，仅可从列表选择；未开分组即无模型）
   models: ImageModel[];
   modelsLoading: boolean;
   currentModel: ImageModel;
@@ -274,7 +274,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const recoveryPromiseRef = useRef<Promise<void> | null>(null);
 
-  // 当前模型：列表命中优先（带 core 声明的 protocols），否则按手动输入的 id 启发式推导
+  // 当前模型：列表命中优先（带 core 声明的 protocols）；未命中（如列表尚未加载）按 id 启发式推导
   const currentModel = useMemo<ImageModel>(() => {
     const found = models.find(m => m.id === selectedModelId);
     if (found) return found;
@@ -326,32 +326,34 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
-  // 拉取模型目录：分组模式读该组货架（管理员已挑选，不再启发式过滤）；
-  // 零配置模式透传 core /v1/models 并按图像模型启发式过滤。
+  // 拉取模型目录：只读选定分组的货架（管理员在管理面板开组上架）；
+  // 未开放任何分组 → 无模型可用，由空态提示联系管理员。
   useEffect(() => {
     if (!groupsLoaded) return;
-    if (groups.length > 0 && selectedGroupId <= 0) return;
+    if (groups.length === 0) {
+      setModels([]);
+      setModelsLoading(false);
+      return;
+    }
+    if (selectedGroupId <= 0) return;
     let cancelled = false;
     setModelsLoading(true);
-    const groupMode = groups.length > 0;
-    api.listModels(groupMode ? selectedGroupId : undefined)
+    api.listModels(selectedGroupId)
       .then(list => {
         if (cancelled) return;
-        // 分组模式按货架 modality 过滤（当前创作中心只有图像模式；空值视为未标注放行）；
-        // 零配置模式沿用模型名启发式过滤。
-        const imageModels = (groupMode
-          ? list.filter(m => !m.modality || m.modality === 'image')
-          : list.filter(m => isLikelyImageModel(m.id)))
+        // 按货架 modality 过滤（当前创作中心只有图像模式；空值视为未标注放行）
+        const imageModels = list
+          .filter(m => !m.modality || m.modality === 'image')
           .map(m => {
             const model = toImageModel(m.id, m.protocols);
             return m.display_name ? { ...model, name: m.display_name } : model;
           });
         setModels(imageModels);
-        // 当前选择不在列表里（切组/未选过）时回落列表第一个
+        // 不允许手动填写模型：当前选择不在列表里（切组/未选过/历史遗留）一律回落列表第一个
         setSelectedModelIdRaw(prev =>
-          (prev && (!groupMode || imageModels.some(m => m.id === prev))) ? prev : (imageModels[0]?.id || ''));
+          (prev && imageModels.some(m => m.id === prev)) ? prev : (imageModels[0]?.id || ''));
       })
-      .catch(() => { /* 模型目录拉取失败不阻断（可手动输入模型名） */ })
+      .catch(() => { /* 模型目录拉取失败不阻断渲染，保留当前选择等下次刷新 */ })
       .finally(() => { if (!cancelled) setModelsLoading(false); });
     return () => { cancelled = true; };
   }, [groupsLoaded, groups, selectedGroupId]);

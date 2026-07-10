@@ -114,13 +114,15 @@ func (s *Server) handleCreateGenerationTask(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 分组模式：校验分组已开放、模型已上架、用户持有该组 key（体验优化；
-	// 硬约束在 core——即使绕过这里，key 权限与计费也由 core 兜底）。
-	if req.GroupID > 0 {
-		if err := s.validateShelfSelection(r.Context(), user, req.GroupID, req.Model, req.Kind); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	// 模型只能来自分组货架：group_id 必填，并校验分组已开放、模型已上架、
+	// 用户持有该组 key（体验优化；硬约束在 core——即使绕过这里，key 权限与计费也由 core 兜底）。
+	if req.GroupID <= 0 {
+		writeError(w, http.StatusBadRequest, "请选择模型分组")
+		return
+	}
+	if err := s.validateShelfSelection(r.Context(), user, req.GroupID, req.Model, req.Kind); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	task := &Task{
@@ -279,52 +281,33 @@ func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request, user *
 	writeJSON(w, http.StatusOK, map[string]any{"groups": items})
 }
 
-// handleListModels GET /api/models：
-//   - 带 group_id 参数 → 返回该分组已上架的货架模型（分组模式）；
-//   - 不带参数 → 拿当前用户默认 key 透传 core /v1/models（零配置兼容模式）。
-func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request, user *User) {
-	if raw := r.URL.Query().Get("group_id"); raw != "" {
-		groupID, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || groupID <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid group_id")
-			return
-		}
-		models, err := s.shelf.ListModels(r.Context(), groupID, true)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "查询货架模型失败: "+err.Error())
-			return
-		}
-		items := make([]map[string]any, 0, len(models))
-		for _, m := range models {
-			display := m.DisplayName
-			if display == "" {
-				display = m.ModelName
-			}
-			items = append(items, map[string]any{
-				"id":           m.ModelName,
-				"display_name": display,
-				"protocols":    m.Protocols,
-				"modality":     m.Modality,
-			})
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": items})
+// handleListModels GET /api/models?group_id=N：返回该分组已上架的货架模型。
+// 模型供给只有货架一条路（管理员在管理面板开组上架），不透传 core /v1/models。
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request, _ *User) {
+	groupID, err := strconv.ParseInt(r.URL.Query().Get("group_id"), 10, 64)
+	if err != nil || groupID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid group_id")
 		return
 	}
-
-	if user.APIKey == "" {
-		writeError(w, http.StatusForbidden, "没有可用的 API Key，请重新登录")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	body, status, err := s.core.ListModels(ctx, user.APIKey)
+	models, err := s.shelf.ListModels(r.Context(), groupID, true)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "查询模型列表失败: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "查询货架模型失败: "+err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	items := make([]map[string]any, 0, len(models))
+	for _, m := range models {
+		display := m.DisplayName
+		if display == "" {
+			display = m.ModelName
+		}
+		items = append(items, map[string]any{
+			"id":           m.ModelName,
+			"display_name": display,
+			"protocols":    m.Protocols,
+			"modality":     m.Modality,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": items})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

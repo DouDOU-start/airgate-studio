@@ -176,7 +176,8 @@ func (w *Worker) executeImageTask(ctx context.Context, task *Task, apiKey string
 
 // resolveTaskKey 选定执行任务用的 sk- key：
 // 任务带 group_id → 用该分组的按组 key（缺失提示重新登录）；
-// 未带 → 默认 key（零配置兼容模式），兜底取用户任意一把按组 key。
+// 未带（货架化之前创建的历史遗留任务）→ 默认 key，兜底取用户任意一把按组 key。
+// 新任务创建入口已强制 group_id，必填校验见 handleCreateGenerationTask。
 func (w *Worker) resolveTaskKey(ctx context.Context, user *User, task *Task) (string, error) {
 	groupID := int64(intFromAny(task.Input["group_id"]))
 	if groupID > 0 {

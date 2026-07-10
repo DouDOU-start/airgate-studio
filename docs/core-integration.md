@@ -81,11 +81,12 @@ core 是唯一身份源（IdP）。studio 在 core 管理后台登记为 OAuth �
 | | `POST /api/admin/groups/{id}/sync-models` | 用管理员本人该组的 key 拉 `/v1/models` 全量同步 |
 | | `GET/PUT /api/admin/models*` | 货架列表 / 上架、展示名、排序 |
 | 用户 | `GET /api/groups` | 已开放分组 ×（本人 key 就绪状态） |
-| | `GET /api/models?group_id=` | 该组已上架模型（展示名+protocols） |
-| | `POST /api/generation-tasks`（带 `group_id`） | 三重校验：组开放 / 模型上架 / 持有该组 key |
+| | `GET /api/models?group_id=`（必填） | 该组已上架模型（展示名+protocols） |
+| | `POST /api/generation-tasks`（`group_id` 必填） | 三重校验：组开放 / 模型上架 / 持有该组 key |
 
-**零配置兼容**：未开放任何分组时，行为与货架功能出现之前完全一致
-（`/api/models` 透传 core 全量 + 默认组单 key）。
+**货架是唯一模型供给**：`/api/models` 不再透传 core 全量目录，用户也不能手动填写
+模型名；未开放任何分组时前端展示空态引导联系管理员，任务创建被 `group_id` 必填拦截
+（货架化之前创建的历史遗留任务仍按默认 key 兜底执行，见 `worker.go` 的 `resolveTaskKey`）。
 
 ### 边角语义（防回归）
 

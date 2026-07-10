@@ -1,11 +1,11 @@
-import { useState, useRef, useEffect, useCallback, type CSSProperties, type KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
 import { cssVar } from '@doudou-start/airgate-theme';
 import type { ImageModel } from './modelConfig';
 import { useStudio } from './StudioContext';
 
-// ModelPicker：动态模型下拉 + 手动输入。
-// 分组模式下（管理员开放了分组）下拉顶部提供分组切换，模型列表为该组货架；
-// 零配置模式列表来自 /api/models 的图像模型启发式过滤，漏掉的可手动填写。
+// ModelPicker：动态模型下拉（仅可从列表选择，不允许手动填写模型名）。
+// 模型供给只有分组货架一条路：下拉顶部提供分组切换，列表为该组已上架模型；
+// 管理员未开放任何分组时展示空态，引导联系管理员。
 
 interface ModelPickerProps {
   value: string;
@@ -101,42 +101,6 @@ const s: Record<string, CSSProperties> = {
     margin: '4px 10px',
     background: cssVar('borderSubtle'),
   },
-  customRow: {
-    display: 'flex',
-    gap: 6,
-    padding: '6px 8px 4px',
-    alignItems: 'center',
-  },
-  customInput: {
-    flex: 1,
-    minWidth: 0,
-    padding: '6px 10px',
-    border: `1px solid ${cssVar('borderSubtle')}`,
-    borderRadius: 8,
-    background: cssVar('bgDeep'),
-    color: cssVar('text'),
-    fontSize: 12,
-    fontFamily: cssVar('fontMono'),
-    outline: 'none',
-  },
-  customBtn: {
-    padding: '6px 12px',
-    border: 'none',
-    borderRadius: 8,
-    background: cssVar('primary'),
-    color: cssVar('primaryForeground'),
-    fontSize: 11,
-    fontWeight: 600,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    flexShrink: 0,
-  },
-  customHint: {
-    padding: '2px 10px 6px',
-    fontSize: 10,
-    color: cssVar('textTertiary'),
-    opacity: 0.7,
-  },
   groupRow: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -181,7 +145,6 @@ export function ModelPicker({ value, models, onChange, upward, compact }: ModelP
   const { groups, selectedGroupId, setSelectedGroupId } = useStudio();
   const groupMode = groups.length > 0;
   const [open, setOpen] = useState(false);
-  const [custom, setCustom] = useState('');
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 240 });
@@ -216,19 +179,6 @@ export function ModelPicker({ value, models, onChange, upward, compact }: ModelP
   const select = (id: string) => {
     onChange(id);
     setOpen(false);
-    setCustom('');
-  };
-
-  const confirmCustom = () => {
-    const id = custom.trim();
-    if (id) select(id);
-  };
-
-  const handleCustomKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      confirmCustom();
-    }
   };
 
   const dropdownStyle: CSSProperties = upward
@@ -287,7 +237,7 @@ export function ModelPicker({ value, models, onChange, upward, compact }: ModelP
           )}
           {models.length === 0 && (
             <div style={s.emptyHint}>
-              {groupMode ? '该分组暂无上架模型，请联系管理员' : '未发现图像模型，可在下方手动输入模型名'}
+              {groupMode ? '该分组暂无上架模型，请联系管理员' : '管理员尚未开放模型分组，请联系管理员'}
             </div>
           )}
           {models.map(m => (
@@ -303,24 +253,6 @@ export function ModelPicker({ value, models, onChange, upward, compact }: ModelP
               <span style={s.optionProto}>{m.protocols.join('/')}</span>
             </button>
           ))}
-          {!groupMode && (
-            <>
-              <div style={s.divider} />
-              <div style={s.customRow}>
-                <input
-                  style={s.customInput}
-                  value={custom}
-                  onChange={e => setCustom(e.target.value)}
-                  onKeyDown={handleCustomKeyDown}
-                  placeholder="手动输入模型名..."
-                />
-                <button type="button" style={s.customBtn} onClick={confirmCustom} disabled={!custom.trim()}>
-                  使用
-                </button>
-              </div>
-              <div style={s.customHint}>列表按名称启发式过滤，漏掉的生图模型可手动填写</div>
-            </>
-          )}
         </div>
       )}
     </>

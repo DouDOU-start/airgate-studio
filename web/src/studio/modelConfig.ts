@@ -1,7 +1,6 @@
-// 模型注册表（动态）：模型列表来自后端 /api/models（透传 core /v1/models，
+// 模型注册表（动态）：模型列表来自后端 /api/models?group_id=N（分组货架，
 // 每条带非标 protocols 数组），不再维护硬编码 MODEL_REGISTRY。
 // 本文件只放纯函数：
-//   - isLikelyImageModel   图像模型过滤启发式（漏判可手动输入模型名兜底）
 //   - resolveImageStrategy 执行策略判定（镜像后端 strategy.go 的 resolveStrategy）
 //   - modelCapabilities    按策略推导 UI 能力（size/quality/图生图控件显隐）
 
@@ -47,32 +46,6 @@ function bareModelName(id: string): string {
   const lower = id.trim().toLowerCase();
   const i = lower.lastIndexOf('/');
   return i >= 0 ? lower.slice(i + 1) : lower;
-}
-
-/** 图像模型命名模式（命中即认为可生图）。 */
-const IMAGE_MODEL_PATTERNS: RegExp[] = [
-  /image/, // gpt-image-*、gemini-*-image、*-image-* …
-  /^imagen/,
-  /^dall-?e/,
-  /^flux/,
-  /^stable-diffusion/,
-  /^sd(xl|3)/,
-  /seedream/,
-  /seededit/,
-  /kolors/,
-  /cogview/,
-  /midjourney|^mj[-_]/,
-  /janus/,
-];
-
-/** 明显不是生图模型的关键词（嵌入/审核/语音等），优先排除。 */
-const NON_IMAGE_KEYWORDS = /embed|moderation|rerank|whisper|tts|audio|transcribe|realtime/;
-
-/** 图像模型过滤启发式：按模型名判断是否可能支持生图。 */
-export function isLikelyImageModel(id: string): boolean {
-  const name = bareModelName(id);
-  if (!name || NON_IMAGE_KEYWORDS.test(name)) return false;
-  return IMAGE_MODEL_PATTERNS.some(p => p.test(name));
 }
 
 /** 协议启发式兜底（镜像后端 guessProtocolsByModelName）：目录没给 protocols 时按前缀猜。 */
@@ -218,7 +191,7 @@ export function modelCapabilities(id: string, protocols: string[]): ModelCapabil
   }
 }
 
-/** 把（可能来自手动输入的）模型 id 组装成 UI 模型条目；无协议声明时启发式兜底。 */
+/** 把模型 id 组装成 UI 模型条目；无协议声明时启发式兜底。 */
 export function toImageModel(id: string, protocols?: string[]): ImageModel {
   const proto = protocols && protocols.length > 0 ? protocols : guessProtocolsByModelName(id);
   return { id, name: id, protocols: proto, caps: modelCapabilities(id, proto) };
