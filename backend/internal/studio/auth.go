@@ -196,11 +196,13 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// provision-key 幂等：已有 key 也会返回完整明文，覆盖存储保持最新。
+	// 默认分组 key：provision 幂等，已有 key 也返回完整明文，覆盖存储保持最新。
 	// 403（用户禁用了该 key）不阻断登录——先让用户进来，任务执行时再报可读错误。
 	apiKey := ""
-	if pk, err := s.core.ProvisionKey(ctx, token.AccessToken); err == nil {
+	defaultGroupID := int64(0)
+	if pk, err := s.core.ProvisionKey(ctx, token.AccessToken, 0); err == nil {
 		apiKey = pk.APIKey
+		defaultGroupID = pk.GroupID
 	} else if errors.Is(err, ErrProvisionKeyForbidden) {
 		s.logger.Warn("oauth_provision_key_forbidden", "airgate_user_id", airgateUserID)
 	} else {
@@ -215,6 +217,14 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		s.renderAuthError(w, "写入本地用户失败")
 		return
 	}
+	if apiKey != "" && defaultGroupID > 0 {
+		if err := s.users.UpsertKey(r.Context(), user.ID, defaultGroupID, apiKey); err != nil {
+			s.logger.Warn("save_default_group_key_failed", "user_id", user.ID, "error", err)
+		}
+	}
+	// 分组货架：按组补领 key（key 只是后端管道，用户与管理员均无感知；
+	// 单个分组领取失败不阻断登录，任务提交时会给出可读提示）。
+	s.provisionGroupKeys(ctx, user, info, token.AccessToken, defaultGroupID)
 
 	exp := time.Now().Add(sessionTTL)
 	http.SetCookie(w, &http.Cookie{
@@ -227,6 +237,66 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// provisionGroupKeys 登录回调的按组领 key：
+//   - 管理员：先把 userinfo.groups 收集进分组镜像（保留 enabled 开关），再为全部可用
+//     分组领 key（后续按组同步模型要用）；
+//   - 普通用户：只为「已开放 ∩ 用户可用」的分组领 key。
+//
+// skipGroupID 为已在默认 provision 中领过的分组，避免重复调用。
+func (s *Server) provisionGroupKeys(ctx context.Context, user *User, info *CoreUserInfo, accessToken string, skipGroupID int64) {
+	if len(info.Groups) == 0 {
+		return
+	}
+	isAdmin := s.cfg.IsAdmin(user.AirgateUserID)
+	if isAdmin {
+		mirror := make([]ShelfGroup, 0, len(info.Groups))
+		for _, g := range info.Groups {
+			mirror = append(mirror, ShelfGroup{
+				CoreGroupID: g.ID, Name: g.Name, RateMultiplier: g.RateMultiplier, Note: g.Note,
+			})
+		}
+		if err := s.shelf.UpsertGroups(ctx, mirror); err != nil {
+			s.logger.Warn("sync_group_mirror_failed", "error", err)
+		}
+	}
+
+	targets := make([]int64, 0, len(info.Groups))
+	if isAdmin {
+		for _, g := range info.Groups {
+			targets = append(targets, g.ID)
+		}
+	} else {
+		enabled, err := s.shelf.ListGroups(ctx, true)
+		if err != nil {
+			s.logger.Warn("list_enabled_groups_failed", "error", err)
+			return
+		}
+		enabledSet := make(map[int64]bool, len(enabled))
+		for _, g := range enabled {
+			enabledSet[g.CoreGroupID] = true
+		}
+		for _, g := range info.Groups {
+			if enabledSet[g.ID] {
+				targets = append(targets, g.ID)
+			}
+		}
+	}
+
+	for _, gid := range targets {
+		if gid == skipGroupID {
+			continue
+		}
+		pk, err := s.core.ProvisionKey(ctx, accessToken, gid)
+		if err != nil {
+			s.logger.Warn("provision_group_key_failed", "user_id", user.ID, "group_id", gid, "error", err)
+			continue
+		}
+		if err := s.users.UpsertKey(ctx, user.ID, pk.GroupID, pk.APIKey); err != nil {
+			s.logger.Warn("save_group_key_failed", "user_id", user.ID, "group_id", pk.GroupID, "error", err)
+		}
+	}
 }
 
 // handleLogout POST /auth/logout：清除会话 cookie。

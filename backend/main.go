@@ -50,12 +50,13 @@ func run(logger *slog.Logger) error {
 	// ── 依赖装配 ──
 	tasks := studio.NewPGTaskStore(db)
 	users := studio.NewPGUserStore(db)
+	shelf := studio.NewPGShelfStore(db)
 	assets, err := studio.NewAssetStore(cfg.DataDir)
 	if err != nil {
 		return err
 	}
 	core := studio.NewCoreClient(cfg.AirgateBaseURL)
-	server := studio.NewServer(cfg, tasks, users, assets, core, logger)
+	server := studio.NewServer(cfg, tasks, users, shelf, assets, core, logger)
 
 	// ── 任务 worker（单 goroutine 轮询）──
 	worker := studio.NewWorker(tasks, users, assets, core, logger)

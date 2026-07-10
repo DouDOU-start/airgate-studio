@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { api } from '../api';
-import type { GenerationTask } from '../api';
+import type { GenerationTask, GroupOption } from '../api';
 import type { GalleryItem, StudioGenerationTask, ImageMode, MediaType } from './types';
 import { isLikelyImageModel, toImageModel, type ImageModel } from './modelConfig';
 
@@ -18,6 +18,7 @@ import { isLikelyImageModel, toImageModel, type ImageModel } from './modelConfig
 const POLL_INTERVAL_MS = 2000;
 const POLL_MAX_ATTEMPTS = 300;
 const MODEL_STORAGE_KEY = 'airgate-studio-model-id';
+const GROUP_STORAGE_KEY = 'airgate-studio-group-id';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -184,7 +185,12 @@ export interface StudioContextValue {
   imageMode: ImageMode;
   setImageMode: (mode: ImageMode) => void;
 
-  // Model registry（动态：/api/models 图像模型过滤 + 手动输入兜底）
+  // Group shelf（分组货架：空列表 = 未启用分组模式）
+  groups: GroupOption[];
+  selectedGroupId: number;
+  setSelectedGroupId: (id: number) => void;
+
+  // Model registry（分组模式读货架；否则 /api/models 图像模型过滤 + 手动输入兜底）
   models: ImageModel[];
   modelsLoading: boolean;
   currentModel: ImageModel;
@@ -240,6 +246,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [mediaType, setMediaType] = useState<MediaType>('image');
   const [imageMode, setImageMode] = useState<ImageMode>('text2img');
 
+  // Group shelf（分组货架）
+  const [groups, setGroups] = useState<GroupOption[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [selectedGroupId, setSelectedGroupIdRaw] = useState<number>(0);
+
   // Model selection（动态注册表；记住上次选择，首次等模型列表回来再定默认）
   const [models, setModels] = useState<ImageModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -283,6 +294,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setImageQuality('');
   }, []);
 
+  const setSelectedGroupId = useCallback((id: number) => {
+    setSelectedGroupIdRaw(id);
+    try { localStorage.setItem(GROUP_STORAGE_KEY, String(id)); } catch { /* ignore */ }
+  }, []);
+
   // 尺寸与模型能力收敛：不支持 size 的模型清空；支持但当前值不在选项里则回落默认
   useEffect(() => {
     const caps = currentModel.caps;
@@ -295,23 +311,52 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     }
   }, [currentModel, imageSize]);
 
-  // 拉取模型目录（core /v1/models 透传，含 protocols），按图像模型启发式过滤
+  // 先探测分组模式：有已开放分组 → 选定分组（记忆优先，其次首个 key 就绪的组）。
   useEffect(() => {
     let cancelled = false;
-    api.listModels()
+    api.listGroups()
       .then(list => {
         if (cancelled) return;
-        const imageModels = list
-          .filter(m => isLikelyImageModel(m.id))
-          .map(m => toImageModel(m.id, m.protocols));
+        setGroups(list);
+        if (list.length > 0) {
+          let stored = 0;
+          try { stored = Number(localStorage.getItem(GROUP_STORAGE_KEY) || ''); } catch { /* ignore */ }
+          const initial = list.find(g => g.core_group_id === stored)
+            ?? list.find(g => g.key_ready)
+            ?? list[0];
+          setSelectedGroupIdRaw(initial.core_group_id);
+        }
+      })
+      .catch(() => { /* 分组拉取失败按未启用分组模式处理 */ })
+      .finally(() => { if (!cancelled) setGroupsLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // 拉取模型目录：分组模式读该组货架（管理员已挑选，不再启发式过滤）；
+  // 零配置模式透传 core /v1/models 并按图像模型启发式过滤。
+  useEffect(() => {
+    if (!groupsLoaded) return;
+    if (groups.length > 0 && selectedGroupId <= 0) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    const groupMode = groups.length > 0;
+    api.listModels(groupMode ? selectedGroupId : undefined)
+      .then(list => {
+        if (cancelled) return;
+        const imageModels = (groupMode ? list : list.filter(m => isLikelyImageModel(m.id)))
+          .map(m => {
+            const model = toImageModel(m.id, m.protocols);
+            return m.display_name ? { ...model, name: m.display_name } : model;
+          });
         setModels(imageModels);
-        // 未选过模型时默认列表第一个（尺寸由 reconcile effect 收敛）
-        setSelectedModelIdRaw(prev => prev || imageModels[0]?.id || '');
+        // 当前选择不在列表里（切组/未选过）时回落列表第一个
+        setSelectedModelIdRaw(prev =>
+          (prev && (!groupMode || imageModels.some(m => m.id === prev))) ? prev : (imageModels[0]?.id || ''));
       })
       .catch(() => { /* 模型目录拉取失败不阻断（可手动输入模型名） */ })
       .finally(() => { if (!cancelled) setModelsLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [groupsLoaded, groups, selectedGroupId]);
 
   // ── Initialization ────────────────────────────────────────────────────────
 
@@ -576,6 +621,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
                 platform: selectedPlatform,
                 model: selectedModelId,
                 prompt: p,
+                ...(groups.length > 0 && selectedGroupId > 0 ? { group_id: selectedGroupId } : {}),
                 parameters: genParameters,
               });
               remoteTaskIds.push(created.id);
@@ -623,6 +669,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
               platform: selectedPlatform,
               model: selectedModelId,
               prompt,
+              ...(groups.length > 0 && selectedGroupId > 0 ? { group_id: selectedGroupId } : {}),
               parameters: genParameters,
             };
 
@@ -698,10 +745,12 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     },
     [
       currentModel,
+      groups,
       imageMode,
       imageQuality,
       imageSize,
       referenceImages,
+      selectedGroupId,
       selectedPlatform,
       selectedModelId,
     ],
@@ -772,6 +821,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setMediaType,
     imageMode,
     setImageMode,
+    groups,
+    selectedGroupId,
+    setSelectedGroupId,
     models,
     modelsLoading,
     currentModel,

@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties, type KeyboardEvent } from 'react';
 import { cssVar } from '@doudou-start/airgate-theme';
 import type { ImageModel } from './modelConfig';
+import { useStudio } from './StudioContext';
 
 // ModelPicker：动态模型下拉 + 手动输入。
-// 列表来自 /api/models 的图像模型启发式过滤；启发式漏掉的模型可在输入框手动填写。
+// 分组模式下（管理员开放了分组）下拉顶部提供分组切换，模型列表为该组货架；
+// 零配置模式列表来自 /api/models 的图像模型启发式过滤，漏掉的可手动填写。
 
 interface ModelPickerProps {
   value: string;
@@ -135,6 +137,39 @@ const s: Record<string, CSSProperties> = {
     color: cssVar('textTertiary'),
     opacity: 0.7,
   },
+  groupRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 5,
+    padding: '6px 8px 2px',
+  },
+  groupLabel: {
+    width: '100%',
+    padding: '0 4px 2px',
+    fontSize: 10,
+    color: cssVar('textTertiary'),
+  },
+  groupPill: {
+    padding: '4px 10px',
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    borderRadius: 999,
+    background: 'transparent',
+    color: cssVar('textSecondary'),
+    cursor: 'pointer',
+    fontSize: 11,
+    fontFamily: 'inherit',
+    transition: 'all 0.12s',
+  },
+  groupPillActive: {
+    borderColor: `color-mix(in oklab, ${cssVar('primary')} 45%, transparent)`,
+    background: cssVar('primarySubtle'),
+    color: cssVar('text'),
+    fontWeight: 600,
+  },
+  groupPillLocked: {
+    opacity: 0.5,
+    cursor: 'not-allowed',
+  },
 };
 
 const hoverCSS = `
@@ -143,6 +178,8 @@ const hoverCSS = `
 `;
 
 export function ModelPicker({ value, models, onChange, upward, compact }: ModelPickerProps) {
+  const { groups, selectedGroupId, setSelectedGroupId } = useStudio();
+  const groupMode = groups.length > 0;
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState('');
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -211,7 +248,7 @@ export function ModelPicker({ value, models, onChange, upward, compact }: ModelP
       >
         <span style={s.dot} />
         <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {value || '选择模型'}
+          {models.find(m => m.id === value)?.name || value || '选择模型'}
         </span>
         <svg
           width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -224,8 +261,34 @@ export function ModelPicker({ value, models, onChange, upward, compact }: ModelP
 
       {open && (
         <div ref={dropdownRef} style={dropdownStyle} className="studio-sidebar">
+          {groupMode && (
+            <>
+              <div style={s.groupRow}>
+                <div style={s.groupLabel}>分组（倍率不同，计费随组）</div>
+                {groups.map(g => {
+                  const active = g.core_group_id === selectedGroupId;
+                  const locked = !g.key_ready;
+                  return (
+                    <button
+                      key={g.core_group_id}
+                      type="button"
+                      disabled={locked}
+                      onClick={() => setSelectedGroupId(g.core_group_id)}
+                      style={{ ...s.groupPill, ...(active ? s.groupPillActive : {}), ...(locked ? s.groupPillLocked : {}) }}
+                      title={locked ? '该分组在你上次登录后才开放，重新登录即可使用' : (g.note || g.name)}
+                    >
+                      {g.name} ×{g.rate_multiplier}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={s.divider} />
+            </>
+          )}
           {models.length === 0 && (
-            <div style={s.emptyHint}>未发现图像模型，可在下方手动输入模型名</div>
+            <div style={s.emptyHint}>
+              {groupMode ? '该分组暂无上架模型，请联系管理员' : '未发现图像模型，可在下方手动输入模型名'}
+            </div>
           )}
           {models.map(m => (
             <button
@@ -234,25 +297,30 @@ export function ModelPicker({ value, models, onChange, upward, compact }: ModelP
               onClick={() => select(m.id)}
               style={{ ...s.option, ...(m.id === value ? s.optionActive : {}) }}
               className={m.id === value ? '' : 'studio-model-option'}
+              title={m.id}
             >
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.id}</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || m.id}</span>
               <span style={s.optionProto}>{m.protocols.join('/')}</span>
             </button>
           ))}
-          <div style={s.divider} />
-          <div style={s.customRow}>
-            <input
-              style={s.customInput}
-              value={custom}
-              onChange={e => setCustom(e.target.value)}
-              onKeyDown={handleCustomKeyDown}
-              placeholder="手动输入模型名..."
-            />
-            <button type="button" style={s.customBtn} onClick={confirmCustom} disabled={!custom.trim()}>
-              使用
-            </button>
-          </div>
-          <div style={s.customHint}>列表按名称启发式过滤，漏掉的生图模型可手动填写</div>
+          {!groupMode && (
+            <>
+              <div style={s.divider} />
+              <div style={s.customRow}>
+                <input
+                  style={s.customInput}
+                  value={custom}
+                  onChange={e => setCustom(e.target.value)}
+                  onKeyDown={handleCustomKeyDown}
+                  placeholder="手动输入模型名..."
+                />
+                <button type="button" style={s.customBtn} onClick={confirmCustom} disabled={!custom.trim()}>
+                  使用
+                </button>
+              </div>
+              <div style={s.customHint}>列表按名称启发式过滤，漏掉的生图模型可手动填写</div>
+            </>
+          )}
         </div>
       )}
     </>

@@ -116,22 +116,23 @@ func (w *Worker) runOnce(ctx context.Context) bool {
 	return true
 }
 
-// executeTask 执行单个生成任务：取用户 key → 调生成 → 图片落地 → 组装 output。
+// executeTask 执行单个生成任务：按任务分组取用户 key → 调生成 → 图片落地 → 组装 output。
 func (w *Worker) executeTask(ctx context.Context, task *Task) (map[string]any, error) {
 	user, err := w.users.GetByID(ctx, task.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("查询任务所属用户失败: %w", err)
 	}
-	if user.APIKey == "" {
-		return nil, fmt.Errorf("没有可用的 API Key（可能在 AirGate 中被禁用），请重新登录")
+	apiKey, err := w.resolveTaskKey(ctx, user, task)
+	if err != nil {
+		return nil, err
 	}
 
 	execCtx, cancel := context.WithTimeout(ctx, w.execTimeout)
 	defer cancel()
 
 	// 模型协议来自 core /v1/models 目录缓存（取不到按模型名启发式兜底）
-	protocols := w.catalog.ProtocolsFor(execCtx, user.APIKey, stringFromAny(task.Input["model"]))
-	result, err := generateImages(execCtx, w.core, user.APIKey, task.Input, protocols, w.loadInputImage)
+	protocols := w.catalog.ProtocolsFor(execCtx, apiKey, stringFromAny(task.Input["model"]))
+	result, err := generateImages(execCtx, w.core, apiKey, task.Input, protocols, w.loadInputImage)
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +160,35 @@ func (w *Worker) executeTask(ctx context.Context, task *Task) (map[string]any, e
 		output["usage"] = result.Usage
 	}
 	return output, nil
+}
+
+// resolveTaskKey 选定执行任务用的 sk- key：
+// 任务带 group_id → 用该分组的按组 key（缺失提示重新登录）；
+// 未带 → 默认 key（零配置兼容模式），兜底取用户任意一把按组 key。
+func (w *Worker) resolveTaskKey(ctx context.Context, user *User, task *Task) (string, error) {
+	groupID := int64(intFromAny(task.Input["group_id"]))
+	if groupID > 0 {
+		keys, err := w.users.KeysByUser(ctx, user.ID)
+		if err != nil {
+			return "", fmt.Errorf("查询用户分组 key 失败: %w", err)
+		}
+		if key := keys[groupID]; key != "" {
+			return key, nil
+		}
+		return "", fmt.Errorf("尚未启用该分组（请重新登录以领取该分组的 API Key）")
+	}
+	if user.APIKey != "" {
+		return user.APIKey, nil
+	}
+	keys, err := w.users.KeysByUser(ctx, user.ID)
+	if err == nil {
+		for _, key := range keys {
+			if key != "" {
+				return key, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("没有可用的 API Key（可能在 AirGate 中被禁用），请重新登录")
 }
 
 // localizeImage 把一张生成图片（data URI 或远程 URL）落地到本地资产存储，返回公开 URL。

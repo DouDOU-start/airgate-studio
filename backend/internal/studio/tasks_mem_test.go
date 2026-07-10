@@ -166,10 +166,32 @@ type memUserStore struct {
 	mu     sync.Mutex
 	nextID int64
 	byID   map[int64]*User
+	// keys 用户按组 key：user_id → core_group_id → sk- key。
+	keys map[int64]map[int64]string
 }
 
 func newMemUserStore() *memUserStore {
-	return &memUserStore{byID: make(map[int64]*User)}
+	return &memUserStore{byID: make(map[int64]*User), keys: make(map[int64]map[int64]string)}
+}
+
+func (s *memUserStore) UpsertKey(_ context.Context, userID, coreGroupID int64, apiKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.keys[userID] == nil {
+		s.keys[userID] = make(map[int64]string)
+	}
+	s.keys[userID][coreGroupID] = apiKey
+	return nil
+}
+
+func (s *memUserStore) KeysByUser(_ context.Context, userID int64) (map[int64]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[int64]string, len(s.keys[userID]))
+	for gid, key := range s.keys[userID] {
+		out[gid] = key
+	}
+	return out, nil
 }
 
 func (s *memUserStore) Upsert(_ context.Context, airgateUserID int64, email, username, apiKey string) (*User, error) {

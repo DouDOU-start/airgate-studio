@@ -17,8 +17,8 @@ type User struct {
 	AirgateUserID int64
 	Email         string
 	Username      string
-	// APIKey 该用户在 core 领取的 sk- key 明文，仅本服务后端持有，
-	// 永不通过任何 API 响应下发到浏览器。
+	// APIKey 默认分组的 sk- key 明文（登录回调 provision group_id=0 所得），仅本服务
+	// 后端持有，永不通过任何 API 响应下发到浏览器。按组的 key 另存 studio_user_keys。
 	APIKey    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -30,6 +30,10 @@ type UserStore interface {
 	Upsert(ctx context.Context, airgateUserID int64, email, username, apiKey string) (*User, error)
 	// GetByID 按本地主键查询；不存在返回 ErrUserNotFound。
 	GetByID(ctx context.Context, id int64) (*User, error)
+	// UpsertKey 写入用户在某 core 分组的 sk- key（登录回调按组 provision 后调用）。
+	UpsertKey(ctx context.Context, userID, coreGroupID int64, apiKey string) error
+	// KeysByUser 返回用户全部按组 key（core_group_id → key 明文）。
+	KeysByUser(ctx context.Context, userID int64) (map[int64]string, error)
 }
 
 // pgUserStore UserStore 的 Postgres 实现。
@@ -59,6 +63,38 @@ func (s *pgUserStore) Upsert(ctx context.Context, airgateUserID int64, email, us
 		return nil, fmt.Errorf("upsert 用户失败: %w", err)
 	}
 	return u, nil
+}
+
+func (s *pgUserStore) UpsertKey(ctx context.Context, userID, coreGroupID int64, apiKey string) error {
+	const q = `
+		INSERT INTO studio_user_keys (user_id, core_group_id, api_key, updated_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (user_id, core_group_id) DO UPDATE
+		SET api_key = EXCLUDED.api_key, updated_at = now()`
+	if _, err := s.db.ExecContext(ctx, q, userID, coreGroupID, apiKey); err != nil {
+		return fmt.Errorf("写入用户分组 key 失败: %w", err)
+	}
+	return nil
+}
+
+func (s *pgUserStore) KeysByUser(ctx context.Context, userID int64) (map[int64]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT core_group_id, api_key FROM studio_user_keys WHERE user_id = $1`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("查询用户分组 key 失败: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[int64]string)
+	for rows.Next() {
+		var groupID int64
+		var apiKey string
+		if err := rows.Scan(&groupID, &apiKey); err != nil {
+			return nil, fmt.Errorf("解析用户分组 key 失败: %w", err)
+		}
+		out[groupID] = apiKey
+	}
+	return out, rows.Err()
 }
 
 func (s *pgUserStore) GetByID(ctx context.Context, id int64) (*User, error) {

@@ -28,5 +28,8 @@ public_base_url: "http://172.17.196.241:5174"
 # 会话 cookie 的 HMAC 签名密钥（必填；生产用足够长的随机串）
 session_secret: "change-me"
 
+# studio 管理员的 core 用户 ID 列表（可选；管理控制台：分组开关、模型上架）
+admin_airgate_user_ids: [1]
+
 # 本地数据目录（可选，默认 data；生成图片落 {data_dir}/assets）
 data_dir: "data"

@@ -58,6 +58,8 @@ export interface ModelInfo {
   owned_by?: string;
   /** core 非标扩展：模型支持的协议（"openai" | "anthropic" | "gemini" ...）。 */
   protocols?: string[];
+  /** 分组货架模式：管理员配置的展示名（缺省同 id）。 */
+  display_name?: string;
 }
 
 export interface UserInfo {
@@ -66,8 +68,41 @@ export interface UserInfo {
   username: string;
   email: string;
   api_key_ready: boolean;
+  is_admin?: boolean;
   balance: number | null;
   balance_detail?: Record<string, unknown>;
+}
+
+/** 用户可见的已开放分组。key_ready=false 表示分组在上次登录后才开放，重新登录即可用。 */
+export interface GroupOption {
+  core_group_id: number;
+  name: string;
+  rate_multiplier: number;
+  note: string;
+  key_ready: boolean;
+}
+
+/** 管理端：分组镜像行。 */
+export interface AdminGroup {
+  core_group_id: number;
+  name: string;
+  rate_multiplier: number;
+  note: string;
+  enabled: boolean;
+  synced_at: string;
+}
+
+/** 管理端：货架模型行。 */
+export interface AdminModel {
+  id: number;
+  core_group_id: number;
+  model_name: string;
+  display_name: string;
+  protocols: string[];
+  enabled: boolean;
+  sort_order: number;
+  missing_at_core: boolean;
+  synced_at: string;
 }
 
 export const api = {
@@ -115,10 +150,38 @@ export const api = {
     return request('DELETE', `/generation-tasks/${taskId}`);
   },
 
-  // ── 模型 ─────────────────────────────────────────────────────────────────
+  // ── 分组与模型 ────────────────────────────────────────────────────────────
 
-  // 透传 core 的 GET /v1/models（OpenAI 形态 {object:"list", data:[...]}）
-  listModels(): Promise<ModelInfo[]> {
-    return request<{ data?: ModelInfo[] }>('GET', '/models').then(r => r.data || []);
+  /** 已开放分组列表；空列表 = 未启用分组模式（回退全量模型透传）。 */
+  listGroups(): Promise<GroupOption[]> {
+    return request<{ groups?: GroupOption[] }>('GET', '/groups').then(r => r.groups || []);
+  },
+
+  // 带 group_id → 分组货架（已上架模型）；不带 → 透传 core /v1/models（零配置兼容）。
+  listModels(groupId?: number): Promise<ModelInfo[]> {
+    const suffix = groupId && groupId > 0 ? `?group_id=${groupId}` : '';
+    return request<{ data?: ModelInfo[] }>('GET', `/models${suffix}`).then(r => r.data || []);
+  },
+
+  // ── 管理端（管理员白名单可见） ────────────────────────────────────────────
+
+  adminListGroups(): Promise<AdminGroup[]> {
+    return request<{ groups?: AdminGroup[] }>('GET', '/admin/groups').then(r => r.groups || []);
+  },
+
+  adminSetGroupEnabled(coreGroupID: number, enabled: boolean): Promise<void> {
+    return request('PUT', `/admin/groups/${coreGroupID}`, { enabled });
+  },
+
+  adminSyncModels(coreGroupID: number): Promise<{ synced: number }> {
+    return request('POST', `/admin/groups/${coreGroupID}/sync-models`);
+  },
+
+  adminListModels(coreGroupID: number): Promise<AdminModel[]> {
+    return request<{ models?: AdminModel[] }>('GET', `/admin/models?group_id=${coreGroupID}`).then(r => r.models || []);
+  },
+
+  adminUpdateModel(id: number, patch: { display_name?: string; enabled?: boolean; sort_order?: number }): Promise<AdminModel> {
+    return request('PUT', `/admin/models/${id}`, patch);
   },
 };

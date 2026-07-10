@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from 'react';
 import { cssVar } from '@doudou-start/airgate-theme';
 import { api, type UserInfo } from './api';
+import { AdminPanel } from './AdminPanel';
 
 const styles: Record<string, CSSProperties> = {
   bar: {
@@ -58,9 +59,10 @@ function formatBalance(balance: number | null): string | null {
   return `$${balance.toFixed(2)}`;
 }
 
-// UserBar 顶部极简用户区：用户名 / 余额 / 退出。
+// UserBar 顶部极简用户区：用户名 / 余额 / 管理入口（仅管理员） / 退出。
 export function UserBar({ user }: { user: UserInfo }) {
   const [loggingOut, setLoggingOut] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
   const balanceLabel = formatBalance(user.balance);
 
   const handleLogout = async () => {
@@ -85,9 +87,15 @@ export function UserBar({ user }: { user: UserInfo }) {
           Key 不可用
         </span>
       )}
+      {user.is_admin && (
+        <button type="button" style={styles.logout} className="studio-gallery-action" onClick={() => setAdminOpen(true)}>
+          管理
+        </button>
+      )}
       <button type="button" style={styles.logout} className="studio-gallery-action" onClick={handleLogout}>
         {loggingOut ? '退出中...' : '退出'}
       </button>
+      {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}
     </div>
   );
 }

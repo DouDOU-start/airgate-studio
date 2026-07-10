@@ -40,9 +40,11 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 | 文件 | 职责 |
 |---|---|
 | `config.go` | 配置装载：config.yaml（CONFIG_PATH，可缺省）+ env 覆盖（必填缺失启动即错） |
-| `db.go` | Postgres 连接 + 幂等迁移（studio_users / studio_tasks） |
-| `auth.go` | OAuth 登录/回调/登出、HMAC 会话 cookie、requireUser 中间件 |
-| `users.go` | UserStore 接口 + pg 实现（api_key 明文只存库、永不出 API） |
+| `db.go` | Postgres 连接 + 幂等迁移（studio_users / studio_tasks / studio_groups / studio_models / studio_user_keys） |
+| `auth.go` | OAuth 登录/回调/登出、HMAC 会话 cookie、requireUser 中间件；回调按组 provision key（管理员自动收集分组镜像） |
+| `users.go` | UserStore 接口 + pg 实现（api_key 明文只存库、永不出 API；含用户按组 key 表） |
+| `shelf.go` | 分组×模型货架：ShelfStore 接口 + pg 实现（分组镜像/开关、按组模型同步/上架、漂移标记） |
+| `admin.go` | 管理端接口（requireAdmin：config 白名单）：分组开关、按组同步模型、上架编辑 |
 | `tasks.go` | Task 模型、TaskStore 接口 + pg 实现（领取/完成/失败重试状态机） |
 | `worker.go` | 单 goroutine 轮询执行；`generateImages` 为策略分发单一切换点 + chat 回退路径 |
 | `strategy.go` | 执行策略判定纯函数（resolveStrategy）+ model→protocols 目录 TTL 缓存 |
@@ -77,6 +79,7 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 | `public_base_url` | `PUBLIC_BASE_URL` | 是 | 本应用对外地址（拼 redirect_uri） |
 | `session_secret` | `SESSION_SECRET` | 是 | 会话 cookie HMAC 密钥 |
 | `data_dir` | `DATA_DIR` | 否 | 数据目录，默认 `data`（产物在 `data/assets/generated/`） |
+| `admin_airgate_user_ids` | `ADMIN_AIRGATE_USER_IDS`（逗号分隔） | 否 | studio 管理员的 core 用户 ID 白名单（分组开关/模型上架） |
 
 ## 🚫 红线
 

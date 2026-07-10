@@ -277,6 +277,38 @@ func TestWorkerFailsWhenUserHasNoAPIKey(t *testing.T) {
 	}
 }
 
+// TestWorkerUsesGroupKeyForGroupTask 分组任务用对应分组的 key；缺 key 报可读错误。
+func TestWorkerUsesGroupKeyForGroupTask(t *testing.T) {
+	core := &fakeCore{resp: chatResponseWithImages(tinyPNGDataURI())}
+	w, tasks, users, _ := newTestWorker(t, core)
+
+	user, _ := users.Upsert(context.Background(), 42, "", "u", "sk-default")
+	_ = users.UpsertKey(context.Background(), user.ID, 2, "sk-group-2")
+
+	// 带 group_id=2 的任务应选用该组 key。
+	key, err := w.resolveTaskKey(context.Background(),
+		user, &Task{UserID: user.ID, Input: map[string]any{"group_id": float64(2)}})
+	if err != nil || key != "sk-group-2" {
+		t.Fatalf("resolveTaskKey = (%q, %v), want sk-group-2", key, err)
+	}
+	// 不带 group_id 走默认 key。
+	key, err = w.resolveTaskKey(context.Background(), user, &Task{UserID: user.ID, Input: map[string]any{}})
+	if err != nil || key != "sk-default" {
+		t.Fatalf("resolveTaskKey 默认 = (%q, %v), want sk-default", key, err)
+	}
+
+	// 缺该组 key 的分组任务：失败并提示重新登录，不发起生成请求。
+	task := seedTask(t, tasks, user.ID, map[string]any{"model": "m", "prompt": "p", "group_id": float64(9)})
+	w.runOnce(context.Background())
+	got, _ := tasks.GetByID(context.Background(), user.ID, task.ID)
+	if got.Status != TaskStatusPending || !strings.Contains(got.ErrorMessage, "重新登录") {
+		t.Fatalf("分组缺 key 任务 = %s/%q", got.Status, got.ErrorMessage)
+	}
+	if len(core.requests) != 0 {
+		t.Fatalf("缺 key 不应发起生成请求")
+	}
+}
+
 func TestWorkerClaimOrderAndIdleReturn(t *testing.T) {
 	core := &fakeCore{resp: chatResponseWithImages(tinyPNGDataURI())}
 	w, tasks, users, _ := newTestWorker(t, core)

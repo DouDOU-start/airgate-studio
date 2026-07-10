@@ -3,6 +3,7 @@ package studio
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -31,6 +32,19 @@ type Config struct {
 	SessionSecret string `yaml:"session_secret"`
 	// DataDir 本地数据目录（生成图片落盘），yaml data_dir / env DATA_DIR，默认 "data"。
 	DataDir string `yaml:"data_dir"`
+	// AdminAirgateUserIDs studio 管理员的 core 用户 ID 列表（分组开关/模型上架权限），
+	// yaml admin_airgate_user_ids / env ADMIN_AIRGATE_USER_IDS（逗号分隔），可选。
+	AdminAirgateUserIDs []int64 `yaml:"admin_airgate_user_ids"`
+}
+
+// IsAdmin 判断 core 用户是否为 studio 管理员。
+func (c *Config) IsAdmin(airgateUserID int64) bool {
+	for _, id := range c.AdminAirgateUserIDs {
+		if id == airgateUserID {
+			return true
+		}
+	}
+	return false
 }
 
 // configPath 返回配置文件路径（env CONFIG_PATH 优先，默认 ./config.yaml）。
@@ -108,6 +122,16 @@ func applyEnvOverrides(cfg *Config) {
 	envStr("PUBLIC_BASE_URL", &cfg.PublicBaseURL)
 	envStr("SESSION_SECRET", &cfg.SessionSecret)
 	envStr("DATA_DIR", &cfg.DataDir)
+	if raw := strings.TrimSpace(os.Getenv("ADMIN_AIRGATE_USER_IDS")); raw != "" {
+		var ids []int64
+		for _, part := range strings.Split(raw, ",") {
+			id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+			if err == nil && id > 0 {
+				ids = append(ids, id)
+			}
+		}
+		cfg.AdminAirgateUserIDs = ids
+	}
 }
 
 // envStr 环境变量非空时覆盖目标值。

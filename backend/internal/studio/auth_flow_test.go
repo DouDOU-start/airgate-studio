@@ -3,6 +3,7 @@ package studio
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -92,9 +93,15 @@ func (f *fakeOAuthCore) handleUserInfo(w http.ResponseWriter, r *http.Request) {
 		"sub":   "42",
 		"name":  "测试用户",
 		"email": "user@example.com",
+		"groups": []map[string]any{
+			{"id": 1, "name": "default", "rate_multiplier": 1},
+			{"id": 2, "name": "vip", "rate_multiplier": 2, "note": "官转"},
+		},
 	})
 }
 
+// handleProvisionKey 模拟 core 的按组 provision：group_id=0 解析为默认分组 1，
+// key 按分组区分（幂等键含分组）。
 func (f *fakeOAuthCore) handleProvisionKey(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "Bearer oat_test_token" {
 		writeOAuthTestError(w, http.StatusUnauthorized, "invalid_token", "令牌无效")
@@ -107,9 +114,17 @@ func (f *fakeOAuthCore) handleProvisionKey(w http.ResponseWriter, r *http.Reques
 		writeOAuthTestError(w, status, "access_denied", "key 已被禁用")
 		return
 	}
+	var req struct {
+		GroupID int64 `json:"group_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.GroupID == 0 {
+		req.GroupID = 1
+	}
 	writeTestJSON(w, http.StatusOK, map[string]any{
-		"api_key":  "sk-test-provisioned",
+		"api_key":  fmt.Sprintf("sk-test-provisioned-g%d", req.GroupID),
 		"key_hint": "oned",
+		"group_id": req.GroupID,
 		"created":  true,
 	})
 }
@@ -137,7 +152,7 @@ func newFlowTestServer(t *testing.T, coreURL string) (*Server, *memUserStore) {
 		PublicBaseURL:     "http://app.example",
 		SessionSecret:     "test-secret",
 	}
-	return NewServer(cfg, nil, users, nil, NewCoreClient(coreURL), slog.New(slog.DiscardHandler)), users
+	return NewServer(cfg, nil, users, newMemShelfStore(), nil, NewCoreClient(coreURL), slog.New(slog.DiscardHandler)), users
 }
 
 // doLogin 执行 /auth/login，返回授权跳转 query 与 studio_oauth cookie。
@@ -248,13 +263,21 @@ func TestCallbackHappyPath(t *testing.T) {
 		}
 	}
 
-	// 用户已入库且 sk- key 落库。
+	// 用户已入库且默认分组 sk- key 落库；按组 key 写入 studio_user_keys。
 	user, err := users.GetByID(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("用户未入库: %v", err)
 	}
-	if user.AirgateUserID != 42 || user.APIKey != "sk-test-provisioned" {
-		t.Fatalf("用户 = %+v, want (airgate_user_id=42, api_key=sk-test-provisioned)", user)
+	if user.AirgateUserID != 42 || user.APIKey != "sk-test-provisioned-g1" {
+		t.Fatalf("用户 = %+v, want (airgate_user_id=42, api_key=sk-test-provisioned-g1)", user)
+	}
+	keys, err := users.KeysByUser(context.Background(), user.ID)
+	if err != nil || keys[1] != "sk-test-provisioned-g1" {
+		t.Fatalf("按组 key = %v, want group1 key", keys)
+	}
+	// 普通用户：未开放任何分组时只领默认组 key，不为其他可用分组领取。
+	if _, ok := keys[2]; ok {
+		t.Fatalf("未开放分组不应领 key: %v", keys)
 	}
 
 	// 会话 cookie 指向本地用户主键；过程态 cookie 已清除。
@@ -270,6 +293,63 @@ func TestCallbackHappyPath(t *testing.T) {
 		if c.Name == oauthCookieName && c.MaxAge != -1 {
 			t.Fatalf("过程态 cookie 未清除: %+v", c)
 		}
+	}
+}
+
+// TestCallbackProvisionsEnabledGroupKeys 已开放分组 ∩ 用户可用分组 → 登录时按组补领 key。
+func TestCallbackProvisionsEnabledGroupKeys(t *testing.T) {
+	t.Parallel()
+
+	core := newFakeOAuthCore(t, fakeOAuthCoreOptions{})
+	s, users := newFlowTestServer(t, core.server.URL)
+	// 管理员已开放分组 2（vip）。
+	if err := s.shelf.UpsertGroups(context.Background(), []ShelfGroup{{CoreGroupID: 2, Name: "vip"}}); err != nil {
+		t.Fatalf("准备分组失败: %v", err)
+	}
+	if err := s.shelf.SetGroupEnabled(context.Background(), 2, true); err != nil {
+		t.Fatalf("开放分组失败: %v", err)
+	}
+
+	query, oauthCookie := doLogin(t, s)
+	rec := doCallback(t, s, "code=oc_test&state="+query.Get("state"), oauthCookie)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("callback = (%d, %s)", rec.Code, rec.Body.String())
+	}
+
+	keys, _ := users.KeysByUser(context.Background(), 1)
+	if keys[1] != "sk-test-provisioned-g1" || keys[2] != "sk-test-provisioned-g2" {
+		t.Fatalf("按组 key = %v, want group1 + group2", keys)
+	}
+}
+
+// TestCallbackAdminCollectsGroups 管理员登录：自动收集分组镜像 + 为全部可用分组领 key。
+func TestCallbackAdminCollectsGroups(t *testing.T) {
+	t.Parallel()
+
+	core := newFakeOAuthCore(t, fakeOAuthCoreOptions{})
+	s, users := newFlowTestServer(t, core.server.URL)
+	s.cfg.AdminAirgateUserIDs = []int64{42}
+
+	query, oauthCookie := doLogin(t, s)
+	rec := doCallback(t, s, "code=oc_test&state="+query.Get("state"), oauthCookie)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("callback = (%d, %s)", rec.Code, rec.Body.String())
+	}
+
+	// 分组镜像已收集（默认不开放）。
+	groups, err := s.shelf.ListGroups(context.Background(), false)
+	if err != nil || len(groups) != 2 {
+		t.Fatalf("分组镜像 = %v, %v, want 2 组", groups, err)
+	}
+	for _, g := range groups {
+		if g.Enabled {
+			t.Fatalf("自动收集的分组不应默认开放: %+v", g)
+		}
+	}
+	// 管理员为全部可用分组领 key（同步模型要用）。
+	keys, _ := users.KeysByUser(context.Background(), 1)
+	if keys[1] == "" || keys[2] == "" {
+		t.Fatalf("管理员按组 key = %v, want 两组齐备", keys)
 	}
 }
 

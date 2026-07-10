@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -15,14 +16,15 @@ type Server struct {
 	cfg    *Config
 	tasks  TaskStore
 	users  UserStore
+	shelf  ShelfStore
 	assets *AssetStore
 	core   *CoreClient
 	logger *slog.Logger
 }
 
 // NewServer 创建 HTTP 服务装配器。
-func NewServer(cfg *Config, tasks TaskStore, users UserStore, assets *AssetStore, core *CoreClient, logger *slog.Logger) *Server {
-	return &Server{cfg: cfg, tasks: tasks, users: users, assets: assets, core: core, logger: logger}
+func NewServer(cfg *Config, tasks TaskStore, users UserStore, shelf ShelfStore, assets *AssetStore, core *CoreClient, logger *slog.Logger) *Server {
+	return &Server{cfg: cfg, tasks: tasks, users: users, shelf: shelf, assets: assets, core: core, logger: logger}
 }
 
 // Handler 装配全部路由：
@@ -44,6 +46,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/generation-tasks/{id}", s.requireUser(s.handleGetGenerationTask))
 	mux.HandleFunc("DELETE /api/generation-tasks/{id}", s.requireUser(s.handleDeleteGenerationTask))
 	mux.HandleFunc("GET /api/models", s.requireUser(s.handleListModels))
+	mux.HandleFunc("GET /api/groups", s.requireUser(s.handleListGroups))
+
+	// 管理端：分组开关 + 按组同步/上架模型（config 白名单判定管理员）。
+	mux.HandleFunc("GET /api/admin/groups", s.requireAdmin(s.handleAdminListGroups))
+	mux.HandleFunc("PUT /api/admin/groups/{id}", s.requireAdmin(s.handleAdminSetGroupEnabled))
+	mux.HandleFunc("POST /api/admin/groups/{id}/sync-models", s.requireAdmin(s.handleAdminSyncModels))
+	mux.HandleFunc("GET /api/admin/models", s.requireAdmin(s.handleAdminListModels))
+	mux.HandleFunc("PUT /api/admin/models/{id}", s.requireAdmin(s.handleAdminUpdateModel))
 
 	mux.HandleFunc("GET /assets-runtime/generated/{file}", func(w http.ResponseWriter, r *http.Request) {
 		s.assets.ServeFile(w, r, r.PathValue("file"))
@@ -64,6 +74,7 @@ func (s *Server) handleUserInfo(w http.ResponseWriter, r *http.Request, user *Us
 		"username":        user.Username,
 		"email":           user.Email,
 		"api_key_ready":   user.APIKey != "",
+		"is_admin":        s.cfg.IsAdmin(user.AirgateUserID),
 		"balance":         nil,
 	}
 	if user.APIKey != "" {
@@ -96,6 +107,15 @@ func (s *Server) handleCreateGenerationTask(w http.ResponseWriter, r *http.Reque
 	if req.Model == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model is required"})
 		return
+	}
+
+	// 分组模式：校验分组已开放、模型已上架、用户持有该组 key（体验优化；
+	// 硬约束在 core——即使绕过这里，key 权限与计费也由 core 兜底）。
+	if req.GroupID > 0 {
+		if err := s.validateShelfSelection(r.Context(), user, req.GroupID, req.Model); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	task := &Task{
@@ -185,10 +205,102 @@ func (s *Server) handleListGenerationTasks(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]interface{}{"tasks": items, "total": total})
 }
 
-// ==================== 模型列表 ====================
+// ==================== 分组与模型 ====================
 
-// handleListModels GET /api/models：拿当前用户的 sk- key 透传 core 的 /v1/models。
+// validateShelfSelection 校验「分组已开放 + 模型已上架 + 用户持有该组 key」。
+func (s *Server) validateShelfSelection(ctx context.Context, user *User, groupID int64, model string) error {
+	groups, err := s.shelf.ListGroups(ctx, true)
+	if err != nil {
+		return fmt.Errorf("查询分组失败: %w", err)
+	}
+	enabled := false
+	for _, g := range groups {
+		if g.CoreGroupID == groupID {
+			enabled = true
+			break
+		}
+	}
+	if !enabled {
+		return fmt.Errorf("该分组未开放")
+	}
+	m, err := s.shelf.GetModel(ctx, groupID, model)
+	if errors.Is(err, ErrShelfNotFound) {
+		return fmt.Errorf("该分组下没有此模型")
+	}
+	if err != nil {
+		return fmt.Errorf("查询模型失败: %w", err)
+	}
+	if !m.Enabled {
+		return fmt.Errorf("该模型未上架")
+	}
+	keys, err := s.users.KeysByUser(ctx, user.ID)
+	if err != nil {
+		return fmt.Errorf("查询用户分组 key 失败: %w", err)
+	}
+	if keys[groupID] == "" {
+		return fmt.Errorf("尚未启用该分组，请重新登录后重试")
+	}
+	return nil
+}
+
+// handleListGroups GET /api/groups：已开放分组 × 当前用户 key 就绪状态。
+// 返回空列表表示未启用分组模式（前端回退全量模型透传）。
+func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request, user *User) {
+	groups, err := s.shelf.ListGroups(r.Context(), true)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询分组失败: " + err.Error()})
+		return
+	}
+	keys, err := s.users.KeysByUser(r.Context(), user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询分组 key 失败: " + err.Error()})
+		return
+	}
+	items := make([]map[string]any, 0, len(groups))
+	for _, g := range groups {
+		items = append(items, map[string]any{
+			"core_group_id":   g.CoreGroupID,
+			"name":            g.Name,
+			"rate_multiplier": g.RateMultiplier,
+			"note":            g.Note,
+			// key_ready=false 表示分组在用户上次登录后才开放，重新登录即可领取。
+			"key_ready": keys[g.CoreGroupID] != "",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"groups": items})
+}
+
+// handleListModels GET /api/models：
+//   - 带 group_id 参数 → 返回该分组已上架的货架模型（分组模式）；
+//   - 不带参数 → 拿当前用户默认 key 透传 core /v1/models（零配置兼容模式）。
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request, user *User) {
+	if raw := r.URL.Query().Get("group_id"); raw != "" {
+		groupID, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || groupID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid group_id"})
+			return
+		}
+		models, err := s.shelf.ListModels(r.Context(), groupID, true)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "查询货架模型失败: " + err.Error()})
+			return
+		}
+		items := make([]map[string]any, 0, len(models))
+		for _, m := range models {
+			display := m.DisplayName
+			if display == "" {
+				display = m.ModelName
+			}
+			items = append(items, map[string]any{
+				"id":           m.ModelName,
+				"display_name": display,
+				"protocols":    m.Protocols,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": items})
+		return
+	}
+
 	if user.APIKey == "" {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "没有可用的 API Key，请重新登录"})
 		return

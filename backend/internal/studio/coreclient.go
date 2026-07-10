@@ -82,9 +82,18 @@ func (c *CoreClient) ExchangeToken(ctx context.Context, code, redirectURI, clien
 
 // CoreUserInfo /oauth/userinfo 响应。
 type CoreUserInfo struct {
-	Sub   string `json:"sub"` // core user_id 的数字字符串
-	Name  string `json:"name"`
-	Email string `json:"email"`
+	Sub    string          `json:"sub"` // core user_id 的数字字符串
+	Name   string          `json:"name"`
+	Email  string          `json:"email"`
+	Groups []CoreUserGroup `json:"groups"` // 用户可用分组（分组货架与按组领 key 的依据）
+}
+
+// CoreUserGroup userinfo 附带的用户可用分组。
+type CoreUserGroup struct {
+	ID             int64   `json:"id"`
+	Name           string  `json:"name"`
+	RateMultiplier float64 `json:"rate_multiplier"`
+	Note           string  `json:"note"`
 }
 
 // UserInfo 用访问令牌获取用户身份。
@@ -109,23 +118,33 @@ func (c *CoreClient) UserInfo(ctx context.Context, accessToken string) (*CoreUse
 	return &out, nil
 }
 
-// ProvisionKeyResult /oauth/provision-key 响应。
+// ProvisionKeyResult /oauth/provision-key 响应。GroupID 为 key 实际落点分组
+// （请求 groupID=0 时 core 解析为默认分组并回填）。
 type ProvisionKeyResult struct {
 	APIKey  string `json:"api_key"`
 	KeyHint string `json:"key_hint"`
+	GroupID int64  `json:"group_id"`
 	Created bool   `json:"created"`
 }
 
 // ErrProvisionKeyForbidden 用户在 core 侧禁用了该应用的 API Key（403）。
 var ErrProvisionKeyForbidden = fmt.Errorf("用户已禁用该应用的 API Key")
 
-// ProvisionKey 为令牌对应用户领取（get-or-create）应用专属 sk- key；幂等。
-func (c *CoreClient) ProvisionKey(ctx context.Context, accessToken string) (*ProvisionKeyResult, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/oauth/provision-key", nil)
+// ProvisionKey 为令牌对应用户按分组领取（get-or-create）应用专属 sk- key；
+// 幂等键 = 用户×应用×分组，groupID=0 表示默认分组。
+func (c *CoreClient) ProvisionKey(ctx context.Context, accessToken string, groupID int64) (*ProvisionKeyResult, error) {
+	var payload io.Reader
+	if groupID > 0 {
+		payload = strings.NewReader(fmt.Sprintf(`{"group_id":%d}`, groupID))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/oauth/provision-key", payload)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if groupID > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	body, status, err := c.do(req)
 	if err != nil {
