@@ -78,7 +78,7 @@ web/       前端 SPA（React 19 + Vite），构建产物经 //go:embed 嵌入�
 make install   # 安装前后端依赖
 make build     # 前端构建 → 嵌入 → 单二进制 bin/airgate-studio
 make ci        # lint + type-check + test + vet + build
-make dev       # 打印本地开发说明（后端 go run + vite dev 代理）
+make dev       # 后端 go run(:8181，读 backend/config.yaml) + 前端 vite dev(:5174 --host)
 ```
 
 部署即运行单二进制：准备好 Postgres 与上述环境变量后 `./bin/airgate-studio`。
@@ -86,6 +86,7 @@ make dev       # 打印本地开发说明（后端 go run + vite dev 代理）
 ## 🤝 相关文档
 
 - 开发护栏：[`CLAUDE.md`](CLAUDE.md)
+- core 对接说明与演进规划：[`docs/core-integration.md`](docs/core-integration.md)
 
 ## 📜 License
 
