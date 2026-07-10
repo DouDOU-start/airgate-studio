@@ -1,0 +1,26 @@
+# Air 热重载配置（对齐 airgate-core/backend/.air.toml）
+# https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # 独立分支不参与根 go.work，构建须 GOWORK=off（与 Makefile 一致）
+  cmd = "GOWORK=off GOTOOLCHAIN=local go build -o ./tmp/main ./cmd/airgate-studio"
+  entrypoint = ["./tmp/main"]
+  delay = 1000
+  # WSL2 + /mnt/* (9p drvfs) 不支持 inotify，必须开 poll 才能检测文件变更
+  poll = true
+  poll_interval = 1000
+  exclude_dir = ["tmp", "vendor", "node_modules", "internal/studio/webdist", "data"]
+  exclude_regex = ["_test.go"]
+  include_ext = ["go", "toml", "yaml"]
+  kill_delay = "0s"
+  send_interrupt = false
+  stop_on_error = true
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true

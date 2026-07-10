@@ -105,7 +105,7 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 make install   # 前后端依赖
 make ci        # lint + vet + test + build（与 CI 一致）
 make build     # 前端构建 → 嵌入 → 单二进制 bin/airgate-studio
-make dev       # 并行启动：后端 go run（:8181，读 backend/config.yaml）+ 前端 vite dev（:5174）
+make dev       # 并行启动：后端 air 热重载（:8181，读 backend/config.yaml，未装 air 退化 go run）+ 前端 vite dev（:5174，轮询监听）
 cd backend && GOWORK=off go test ./internal/studio/ -v -count=1   # 后端单测
 ```
 

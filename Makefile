@@ -44,18 +44,25 @@ ensure-webdist:
 
 # ===================== 开发 =====================
 
-dev: ## 本地开发：后端 go run（:8181，读 backend/config.yaml）+ 前端 vite dev（:5174 --host）
+dev: ## 本地开发：后端热重载（:8181，读 backend/config.yaml，需 air）+ 前端 vite dev（:5174 --host）
 	@if [ ! -f backend/config.yaml ]; then \
 		echo "缺少 backend/config.yaml，请先：cp backend/config.yaml.example backend/config.yaml 并按需修改"; \
 		exit 1; \
 	fi
 	@trap 'kill 0' EXIT; \
-	(cd backend && GOWORK=off $(GO) run ./cmd/airgate-studio) & \
+	$(MAKE) dev-backend & \
 	(cd web && pnpm dev --host) & \
 	wait
 
-dev-backend: ## 仅后端（读 backend/config.yaml；env 可覆盖单项）
-	cd backend && GOWORK=off $(GO) run ./cmd/airgate-studio
+dev-backend: ## 仅后端（带热重载，需要 air；读 backend/config.yaml，env 可覆盖单项）
+	@cd backend && \
+	if command -v air > /dev/null 2>&1; then \
+		air; \
+	else \
+		echo "未安装 air，使用普通模式启动（无热重载）"; \
+		echo "安装 air: go install github.com/air-verse/air@latest"; \
+		GOWORK=off $(GO) run ./cmd/airgate-studio; \
+	fi
 
 dev-web: ## 仅前端 vite dev server（--host 允许非本机 IP 访问）
 	cd web && pnpm dev --host
