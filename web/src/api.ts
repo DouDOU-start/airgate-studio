@@ -1,62 +1,40 @@
-const PLUGIN_ID = 'airgate-studio';
+// 独立部署 API 层：同源 cookie 会话（不再携带 core JWT），基路径 /api。
+// 401 统一跳转 /auth/login 走 core 单点登录。
 
-function baseURL(): string {
-  return `/api/v1/ext-user/${PLUGIN_ID}`;
-}
-
-function getStoredToken(): string {
-  if (typeof window === 'undefined') return '';
-  try {
-    return window.localStorage.getItem('token') || '';
-  } catch {
-    return '';
-  }
-}
-
-interface ApiEnvelope<T> {
-  code: number;
-  data?: T;
-  message?: string;
+function redirectToLogin(): void {
+  window.location.href = '/auth/login';
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const url = `${baseURL()}${path}`;
+  const url = `/api${path}`;
   const headers: Record<string, string> = {};
-  const token = getStoredToken();
-  if (token) headers['Authorization'] = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const options: RequestInit = {
     method,
     headers,
+    credentials: 'same-origin',
   };
   if (body !== undefined) {
     options.body = JSON.stringify(body);
   }
   const resp = await fetch(url, options);
+  if (resp.status === 401) {
+    redirectToLogin();
+    throw new Error('unauthorized');
+  }
   if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: { message: resp.statusText } }));
-    throw new Error(err?.error?.message || `HTTP ${resp.status}`);
+    const err = await resp.json().catch(() => ({ error: resp.statusText }));
+    throw new Error(
+      (typeof err?.error === 'string' ? err.error : err?.error?.message) || `HTTP ${resp.status}`,
+    );
   }
   return resp.json();
-}
-
-async function requestCore<T>(path: string): Promise<T> {
-  const resp = await fetch(path, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-    },
-  });
-  const json = await resp.json().catch(() => null) as ApiEnvelope<T> | null;
-  if (!resp.ok || !json || json.code !== 0) {
-    throw new Error(json?.message || `HTTP ${resp.status}`);
-  }
-  return (json.data ?? ({} as T));
 }
 
 export interface GenerationTask {
   id: number;
   task_id: number;
+  public_task_id?: string;
   status: string;
   progress: number;
   prompt: string;
@@ -67,32 +45,44 @@ export interface GenerationTask {
   input_images?: string[];
   input_mask?: string;
   result_content?: string;
+  images?: string[];
   error_message?: string;
   created_at: string;
   updated_at?: string;
   completed_at?: string;
 }
 
-export interface PlatformInfo {
-  name: string;
-  display_name: string;
-}
-
 export interface ModelInfo {
   id: string;
-  name: string;
-  platform?: string;
-  image_only?: boolean;
-  capabilities?: string[];
+  object?: string;
+  owned_by?: string;
+  /** core 非标扩展：模型支持的协议（"openai" | "anthropic" | "gemini" ...）。 */
+  protocols?: string[];
 }
 
 export interface UserInfo {
   user_id: number;
+  airgate_user_id: number;
   username: string;
-  role: string;
+  email: string;
+  api_key_ready: boolean;
+  balance: number | null;
+  balance_detail?: Record<string, unknown>;
 }
 
 export const api = {
+  // ── 会话 ──────────────────────────────────────────────────────────────────
+
+  getUserInfo(): Promise<UserInfo> {
+    return request('GET', '/user/info');
+  },
+
+  async logout(): Promise<void> {
+    await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
+  },
+
+  // ── 生成任务 ──────────────────────────────────────────────────────────────
+
   createGenerationTask(params: {
     kind: string;
     operation: string;
@@ -125,19 +115,10 @@ export const api = {
     return request('DELETE', `/generation-tasks/${taskId}`);
   },
 
-  listPlatforms(): Promise<PlatformInfo[]> {
-    return request<{ platforms: PlatformInfo[] }>('GET', '/platforms').then(r => r.platforms || []);
-  },
+  // ── 模型 ─────────────────────────────────────────────────────────────────
 
-  listModels(platform?: string, capability?: string): Promise<ModelInfo[]> {
-    const qs = new URLSearchParams();
-    if (platform) qs.set('platform', platform);
-    if (capability) qs.set('capability', capability);
-    const suffix = qs.toString() ? `?${qs}` : '';
-    return request<{ models: ModelInfo[] }>('GET', `/models${suffix}`).then(r => r.models || []);
-  },
-
-  getPublicSettings(): Promise<Record<string, string>> {
-    return requestCore<Record<string, string>>('/api/v1/settings/public');
+  // 透传 core 的 GET /v1/models（OpenAI 形态 {object:"list", data:[...]}）
+  listModels(): Promise<ModelInfo[]> {
+    return request<{ data?: ModelInfo[] }>('GET', '/models').then(r => r.data || []);
   },
 };

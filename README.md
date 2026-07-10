@@ -1,7 +1,7 @@
 <div align="center">
   <h1>AirGate Studio</h1>
 
-  <p><strong>多模态内容创作中心插件</strong></p>
+  <p><strong>独立部署的多模态内容创作应用</strong></p>
 
   <p>
     <a href="https://github.com/DouDOU-start/airgate-studio/releases"><img src="https://img.shields.io/github/v/release/DouDOU-start/airgate-studio?style=flat-square" alt="release" /></a>
@@ -14,82 +14,78 @@
 
 ---
 
-AirGate 扩展插件：面向图片、视频、音频等多模态内容生成的统一创作中心。生成任务统一走 Core 任务状态机，由网关插件执行上游调用，本插件专注创作流程与结果管理。
-
-- 插件 ID：`airgate-studio` · 类型：`extension`
-- 依赖：AirGate Core（任务 / 模型目录 / 用户能力经 `Host.Invoke`）；生成执行依赖网关插件（当前为 `gateway-openai`）
+> **standalone-gateway 分支**：本仓已从「AirGate 插件」改造为**独立部署的单体 Web 应用**。
+> 独立 Go HTTP 服务 + 自带 SPA 前端；用户身份经 AirGate（core）的 OAuth2 授权码 + PKCE
+> 单点登录；生成任务存自己的 Postgres、由自带 worker 拿用户的 sk- key 调 core 的
+> OpenAI 兼容 `/v1/chat/completions` 执行；产物图片存本地磁盘。不依赖 `airgate-sdk`。
 
 ## ✨ 核心特性
 
-- **图像创作**：文生图、图像编辑、局部重绘（掩码编辑器）——已实现
-- **任务管理**：生成任务创建、状态跟踪、列表与结果库（基于 Core 统一任务状态机，可恢复、可审计）
-- **模型选择**：按平台模型目录动态列出可用生成模型
-- **视频 / 音乐生成**：类型已预留，规划中
+- **图像创作**：文生图、图生图、局部重绘（掩码编辑器）、批量生成
+- **任务管理**：自带 Postgres 任务表 + 轮询 worker（领取 / 失败重试 / 重启恢复）
+- **单点登录**：OAuth2 授权码 + PKCE 对接 AirGate，自动领取用户专属 sk- key
+- **本地资产**：生成图片落盘 `{DATA_DIR}/assets/generated/`，经 `/assets-runtime/` 提供
 
-## 🧩 接入位置
-
-扩展（extension）插件，自身不执行上游调用；生成任务交 Core 任务状态机编排、由网关插件执行：
+## 🧭 架构
 
 ```text
-用户浏览器 → /studio 页面（前端 bundle，Core 提供资产）
-                │ 调插件用户 API（/api/v1/ext-user/airgate-studio/*，JWT）
-                ▼
-        airgate-studio（本仓，gRPC 子进程）
-                │ Host.Invoke("tasks.create" / "models.list" / …)
-                ▼
-        Core 任务状态机 → 网关插件（gateway-openai）执行上游生成
+浏览器 ──▶ airgate-studio（本仓，单二进制，内嵌 SPA）
+             │  /auth/*：OAuth2 + PKCE 单点登录（core /oauth/authorize|token|userinfo|provision-key）
+             │  /api/*：会话 cookie 鉴权的业务 API
+             │  worker：轮询 studio_tasks，拿用户 sk- key 调 core /v1/chat/completions
+             ▼
+        AirGate core（渠道调度 + 计费） ──▶ 上游多模态图像模型
 ```
 
 ## 🚦 路由
 
-用户入口 `/api/v1/ext-user/airgate-studio/*`（JWT 鉴权），由 `backend/internal/studio/routes.go` 声明：
-
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST / GET | `/generation-tasks` | 创建 / 列出生成任务 |
-| GET / DELETE | `/generation-tasks/{id}` | 读取 / 删除生成任务 |
-| GET | `/platforms` | 可用平台列表 |
-| GET | `/models` | 可用生成模型列表 |
+| GET | `/auth/login` · `/auth/callback` | OAuth2 登录 / 回调 |
+| POST | `/auth/logout` | 退出登录 |
+| GET | `/api/user/info` | 会话用户 + 余额 |
+| POST / GET | `/api/generation-tasks` | 创建 / 列出生成任务 |
+| GET / DELETE | `/api/generation-tasks/{id}` | 读取 / 删除生成任务 |
+| GET | `/api/models` | 透传 core `/v1/models` |
+| GET | `/assets-runtime/generated/{file}` | 生成产物图片 |
+| * | `/*` | SPA 前端（fallback index.html） |
 
-前端单页入口：平台内 `/studio` 页面（创作区、掩码编辑、结果库）。
+## ⚙️ 环境变量
 
-## 🛡 权限声明
+样例见 [`.env.example`](.env.example)。
 
-插件按最小权限声明 Host 能力（见 `backend/internal/studio/metadata.go`）：`tasks.create` / `tasks.get` / `tasks.list` / `platforms.list` / `models.list` / `users.get`。
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `LISTEN_ADDR` | 否 | 监听地址，默认 `:8181` |
+| `DATABASE_URL` | 是 | Postgres 连接串 |
+| `AIRGATE_BASE_URL` | 是 | core 地址（服务端调用） |
+| `AIRGATE_PUBLIC_URL` | 否 | 浏览器可达的 core 地址，默认同 `AIRGATE_BASE_URL` |
+| `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` | 是 | core 侧登记的 OAuth 客户端凭据 |
+| `PUBLIC_BASE_URL` | 是 | 本应用对外地址（拼 redirect_uri） |
+| `SESSION_SECRET` | 是 | 会话 cookie HMAC 密钥 |
+| `DATA_DIR` | 否 | 数据目录，默认 `data` |
 
 ## 📁 目录结构
 
 ```text
-backend/   Go 插件实现（internal/studio/：路由、生成任务编排、Host 调用）
-web/       前端（React 19 + Vite），输出 web/dist/index.js
+backend/   Go 服务（internal/studio/：OAuth 会话、任务仓储、worker、资产、路由、SPA 托管）
+web/       前端 SPA（React 19 + Vite），构建产物经 //go:embed 嵌入二进制
 ```
 
 ## 🚀 构建与开发
 
 ```bash
 make install   # 安装前后端依赖
-make dev       # devserver 独立调试（脱离 Core）
-make build     # 前端 bundle → 嵌入 → Go 二进制
+make build     # 前端构建 → 嵌入 → 单二进制 bin/airgate-studio
 make ci        # lint + type-check + test + vet + build
-make release   # 交叉编译 linux-amd64
+make dev       # 打印本地开发说明（后端 go run + vite dev 代理）
 ```
 
-产出的二进制由 AirGate Core 作为 gRPC 子进程加载；前端为单 `index.js` bundle，由 Core 统一提供资产服务。
-
-## 📦 发版
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-`release.yml` 会自动矩阵构建 4 个平台二进制（linux/darwin × amd64/arm64），通过 ldflags 注入版本号，上传到 GitHub Release。
+部署即运行单二进制：准备好 Postgres 与上述环境变量后 `./bin/airgate-studio`。
 
 ## 🤝 相关文档
 
 - 开发护栏：[`CLAUDE.md`](CLAUDE.md)
-- 插件开发流程：skill `develop-plugin`
-- 任务状态机与插件契约：skill `core-dev`
 
 ## 📜 License
 

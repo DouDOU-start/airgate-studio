@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -10,12 +11,13 @@ import {
 import { api } from '../api';
 import type { GenerationTask } from '../api';
 import type { GalleryItem, StudioGenerationTask, ImageMode, MediaType } from './types';
-import { getModelConfig, getDefaultModel, type ModelConfig } from './modelConfig';
+import { isLikelyImageModel, toImageModel, type ImageModel } from './modelConfig';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 2000;
 const POLL_MAX_ATTEMPTS = 300;
+const MODEL_STORAGE_KEY = 'airgate-studio-model-id';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -182,13 +184,17 @@ export interface StudioContextValue {
   imageMode: ImageMode;
   setImageMode: (mode: ImageMode) => void;
 
-  // Model config
-  currentModel: ModelConfig;
+  // Model registry（动态：/api/models 图像模型过滤 + 手动输入兜底）
+  models: ImageModel[];
+  modelsLoading: boolean;
+  currentModel: ImageModel;
   selectedModelId: string;
   setSelectedModelId: (id: string) => void;
   selectedPlatform: string;
   imageSize: string;
   setImageSize: (size: string) => void;
+  imageQuality: string;
+  setImageQuality: (quality: string) => void;
 
   // Reference images (for img2img / inpaint).
   // Array so multiple gallery items can be added as references; ComposerBar
@@ -234,9 +240,14 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [mediaType, setMediaType] = useState<MediaType>('image');
   const [imageMode, setImageMode] = useState<ImageMode>('text2img');
 
-  // Model selection (hardcoded registry)
-  const [selectedModelId, setSelectedModelIdRaw] = useState(getDefaultModel().id);
-  const [imageSize, setImageSize] = useState(getDefaultModel().defaultSize);
+  // Model selection（动态注册表；记住上次选择，首次等模型列表回来再定默认）
+  const [models, setModels] = useState<ImageModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [selectedModelId, setSelectedModelIdRaw] = useState<string>(() => {
+    try { return localStorage.getItem(MODEL_STORAGE_KEY) ?? ''; } catch { return ''; }
+  });
+  const [imageSize, setImageSize] = useState('');
+  const [imageQuality, setImageQuality] = useState('');
 
   // Reference images (accumulated via "use as reference" from gallery)
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
@@ -251,43 +262,60 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [previewItem, setPreviewItem] = useState<GalleryItem | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [generatedAssetRetentionDays, setGeneratedAssetRetentionDays] = useState<number | null>(null);
+  // 独立部署：产物存本地磁盘、无保留期策略（原 core 的 asset_retention 设置已不适用）
+  const generatedAssetRetentionDays: number | null = null;
   const galleryOffsetRef = useRef(0);
 
   const recoveryPromiseRef = useRef<Promise<void> | null>(null);
 
-  // Derived from hardcoded registry
-  const currentModel = getModelConfig(selectedModelId) ?? getDefaultModel();
-  const selectedPlatform = currentModel.platform;
+  // 当前模型：列表命中优先（带 core 声明的 protocols），否则按手动输入的 id 启发式推导
+  const currentModel = useMemo<ImageModel>(() => {
+    const found = models.find(m => m.id === selectedModelId);
+    if (found) return found;
+    return toImageModel(selectedModelId || '');
+  }, [models, selectedModelId]);
+  const selectedPlatform = currentModel.protocols[0] ?? '';
 
   const setSelectedModelId = useCallback((id: string) => {
     setSelectedModelIdRaw(id);
-    const newModel = getModelConfig(id);
-    if (newModel && !newModel.sizes.some(s => s.value === imageSize)) {
-      setImageSize(newModel.defaultSize);
+    try { localStorage.setItem(MODEL_STORAGE_KEY, id); } catch { /* ignore */ }
+    // 质量档位随模型能力变化，切模型即复位（尺寸由下方 reconcile effect 统一收敛）
+    setImageQuality('');
+  }, []);
+
+  // 尺寸与模型能力收敛：不支持 size 的模型清空；支持但当前值不在选项里则回落默认
+  useEffect(() => {
+    const caps = currentModel.caps;
+    if (!caps.supportsSize) {
+      if (imageSize !== '') setImageSize('');
+      return;
     }
-  }, [imageSize]);
+    if (!caps.sizes.some(s => s.value === imageSize)) {
+      setImageSize(caps.defaultSize);
+    }
+  }, [currentModel, imageSize]);
+
+  // 拉取模型目录（core /v1/models 透传，含 protocols），按图像模型启发式过滤
+  useEffect(() => {
+    let cancelled = false;
+    api.listModels()
+      .then(list => {
+        if (cancelled) return;
+        const imageModels = list
+          .filter(m => isLikelyImageModel(m.id))
+          .map(m => toImageModel(m.id, m.protocols));
+        setModels(imageModels);
+        // 未选过模型时默认列表第一个（尺寸由 reconcile effect 收敛）
+        setSelectedModelIdRaw(prev => prev || imageModels[0]?.id || '');
+      })
+      .catch(() => { /* 模型目录拉取失败不阻断（可手动输入模型名） */ })
+      .finally(() => { if (!cancelled) setModelsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   // ── Initialization ────────────────────────────────────────────────────────
 
   const PAGE_SIZE = 20;
-
-  useEffect(() => {
-    let active = true;
-    api.getPublicSettings()
-      .then((settings) => {
-        if (!active) return;
-        const raw = settings.asset_retention_generated_days?.trim();
-        const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-        setGeneratedAssetRetentionDays(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
-      })
-      .catch(() => {
-        if (active) setGeneratedAssetRetentionDays(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   function tasksToGallery(taskList: GenerationTask[]): GalleryItem[] {
     const items: GalleryItem[] = [];
@@ -495,7 +523,14 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       prompt: string,
       options?: GenerateOptions,
     ) => {
-      if (!prompt.trim()) return;
+      if (!prompt.trim() || !selectedModelId.trim()) return;
+
+      // 仅下发当前模型能力支持的参数（size/quality 在 images/predict 路径原生生效）
+      const caps = currentModel.caps;
+      const params: Record<string, unknown> = {};
+      if (caps.supportsSize && imageSize) params.size = imageSize;
+      if (caps.supportsQuality && imageQuality) params.quality = imageQuality;
+      const genParameters = Object.keys(params).length > 0 ? params : undefined;
 
       const controller = new AbortController();
       const signal = controller.signal;
@@ -541,7 +576,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
                 platform: selectedPlatform,
                 model: selectedModelId,
                 prompt: p,
-                parameters: imageSize ? { size: imageSize } : undefined,
+                parameters: genParameters,
               });
               remoteTaskIds.push(created.id);
               updateTask({ remoteTaskIds: [...remoteTaskIds] });
@@ -588,7 +623,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
               platform: selectedPlatform,
               model: selectedModelId,
               prompt,
-              parameters: imageSize ? { size: imageSize } : undefined,
+              parameters: genParameters,
             };
 
             if (mode === 'img2img' || mode === 'inpaint') {
@@ -662,7 +697,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       void runTask();
     },
     [
+      currentModel,
       imageMode,
+      imageQuality,
       imageSize,
       referenceImages,
       selectedPlatform,
@@ -735,12 +772,16 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setMediaType,
     imageMode,
     setImageMode,
+    models,
+    modelsLoading,
     currentModel,
     selectedModelId,
     setSelectedModelId,
     selectedPlatform,
     imageSize,
     setImageSize,
+    imageQuality,
+    setImageQuality,
     referenceImages,
     setReferenceImages,
     isGenerating,

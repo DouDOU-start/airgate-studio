@@ -8,9 +8,6 @@ on:
 permissions:
   contents: write
 
-env:
-  GOPRIVATE: github.com/DouDOU-start/airgate-sdk
-
 jobs:
   build:
     name: 构建 ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -60,11 +57,8 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "注入 PluginVersion=${VERSION}"
           mkdir -p bin
           cd backend && go build -buildvcs=false -trimpath \
-            -ldflags "-X 'github.com/DouDOU-start/airgate-studio/backend/internal/studio.PluginVersion=${VERSION}'" \
             -o ../bin/airgate-studio-${{ matrix.goos }}-${{ matrix.goarch }} .
 
       - name: 生成 SHA256

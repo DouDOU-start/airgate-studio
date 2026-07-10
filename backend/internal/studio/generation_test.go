@@ -1,6 +1,9 @@
 package studio
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestBuildTaskInputKeepsEditImagesAndMask(t *testing.T) {
 	req := createGenerationTaskRequest{
@@ -38,12 +41,17 @@ func TestBuildTaskInputKeepsEditImagesAndMask(t *testing.T) {
 	if got := input["prompt"]; got != "change the jacket color" {
 		t.Fatalf("prompt = %v, want original prompt", got)
 	}
+	// 独立部署下 operation 记入 input（本地任务表没有 attributes 列）
+	if got := input["operation"]; got != "edit" {
+		t.Fatalf("operation = %v, want edit", got)
+	}
 }
 
 func TestBuildGenerationTaskResponseReturnsInputImages(t *testing.T) {
-	task := &hostTask{
+	task := &Task{
 		ID:       12,
-		Status:   "completed",
+		PublicID: "uuid-12",
+		Status:   TaskStatusCompleted,
 		Progress: 100,
 		Input: map[string]interface{}{
 			"prompt": "turn it into anime",
@@ -51,12 +59,11 @@ func TestBuildGenerationTaskResponseReturnsInputImages(t *testing.T) {
 			"images": []interface{}{
 				"data:image/png;base64,source",
 			},
-			"mask": "data:image/png;base64,mask",
-		},
-		Attributes: map[string]interface{}{
+			"mask":      "data:image/png;base64,mask",
 			"operation": "edit",
 			"size":      "1024x1024",
 		},
+		CreatedAt: time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC),
 	}
 
 	resp := buildGenerationTaskResponse(task)
@@ -69,5 +76,72 @@ func TestBuildGenerationTaskResponseReturnsInputImages(t *testing.T) {
 	}
 	if got := resp["input_mask"]; got != "data:image/png;base64,mask" {
 		t.Fatalf("input_mask = %v", got)
+	}
+	if got := resp["operation"]; got != "edit" {
+		t.Fatalf("operation = %v, want edit", got)
+	}
+	if got := resp["size"]; got != "1024x1024" {
+		t.Fatalf("size = %v, want 1024x1024", got)
+	}
+	if got := resp["created_at"]; got != "2026-07-01T08:00:00Z" {
+		t.Fatalf("created_at = %v", got)
+	}
+}
+
+func TestBuildGenerationTaskResponseMapsOutput(t *testing.T) {
+	done := time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
+	task := &Task{
+		ID:       7,
+		PublicID: "uuid-7",
+		Status:   TaskStatusCompleted,
+		Progress: 100,
+		Input: map[string]interface{}{
+			"prompt":    "a cat",
+			"model":     "gpt-image-2",
+			"operation": "generate",
+		},
+		Output: map[string]interface{}{
+			"content": "![generated image](/assets-runtime/generated/abc.png)",
+			"images":  []interface{}{"/assets-runtime/generated/abc.png"},
+			"model":   "gpt-image-2-0709",
+			"usage":   map[string]interface{}{"total_tokens": float64(120)},
+		},
+		CreatedAt:   time.Date(2026, 7, 1, 8, 59, 0, 0, time.UTC),
+		CompletedAt: &done,
+	}
+
+	resp := buildGenerationTaskResponse(task)
+	if got := resp["result_content"]; got != "![generated image](/assets-runtime/generated/abc.png)" {
+		t.Fatalf("result_content = %v", got)
+	}
+	images, ok := resp["images"].([]string)
+	if !ok || len(images) != 1 || images[0] != "/assets-runtime/generated/abc.png" {
+		t.Fatalf("images = %#v", resp["images"])
+	}
+	// output.model 优先于 input.model
+	if got := resp["model"]; got != "gpt-image-2-0709" {
+		t.Fatalf("model = %v", got)
+	}
+	if _, ok := resp["usage"]; !ok {
+		t.Fatalf("usage 缺失")
+	}
+	if got := resp["completed_at"]; got != "2026-07-01T09:00:00Z" {
+		t.Fatalf("completed_at = %v", got)
+	}
+}
+
+func TestResolveTaskType(t *testing.T) {
+	tests := []struct {
+		kind, operation, want string
+	}{
+		{"image", "generate", "image.generate"},
+		{"image", "edit", "image.edit"},
+		{"image", "inpaint", "image.edit"},
+		{"video", "generate", "video.generate"},
+	}
+	for _, tt := range tests {
+		if got := resolveTaskType(tt.kind, tt.operation); got != tt.want {
+			t.Errorf("resolveTaskType(%q, %q) = %q, want %q", tt.kind, tt.operation, got, tt.want)
+		}
 	}
 }

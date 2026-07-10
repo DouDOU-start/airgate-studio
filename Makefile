@@ -1,10 +1,10 @@
-# AirGate 创作中心插件 Makefile
+# AirGate Studio 独立部署 Makefile（standalone-gateway 分支：不再是插件）
 
 GO := GOTOOLCHAIN=local go
 
 WEBDIST := backend/internal/studio/webdist
 
-.PHONY: help install build build-web build-backend release dev ensure-webdist sync-webdist clean test vet ci pre-commit lint type-check fmt setup-hooks
+.PHONY: help install dev build build-web sync-webdist ensure-webdist ci pre-commit lint type-check test vet fmt setup-hooks clean
 
 help: ## 显示帮助信息
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -16,40 +16,25 @@ install: ## 安装前后端依赖
 	cd backend && $(GO) mod download
 	@echo "依赖安装完成"
 
-build: build-backend ## 完整构建：前端 → 嵌入后端 → 编译
+build: sync-webdist ## 完整构建：前端 → 嵌入后端 → 编译单二进制
+	mkdir -p bin
+	cd backend && GOWORK=off $(GO) build -o ../bin/airgate-studio .
+	@echo "构建完成: bin/airgate-studio"
 
-build-web: ## 构建插件前端
+build-web: ## 构建前端 SPA
 	cd web && pnpm build
-
-# build-backend 走 sync-webdist：必先 pnpm build、再 force-sync。
-build-backend: sync-webdist ## 构建后端二进制
-	mkdir -p bin
-	cd backend && $(GO) build -o ../bin/airgate-studio .
-
-# release 与 build-backend 共用 sync-webdist，不再内联 rm/cp 同步逻辑。
-release: sync-webdist ## 编译 Linux amd64 版本（用于上传到 marketplace）
-	mkdir -p bin
-	cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -buildvcs=false -trimpath -ldflags "-X 'github.com/DouDOU-start/airgate-studio/backend/internal/studio.PluginVersion=$${VERSION:-dev}'" -o ../bin/airgate-studio-linux-amd64 .
-	@echo "构建完成: bin/airgate-studio-linux-amd64"
 
 # sync-webdist：生产构建路径上的"权威"同步点。
 # 依赖 build-web → 每次都会先 pnpm build，保证 web/dist 是当前源码产物，
 # 然后 rm -rf + cp -r 把 webdist 强制刷新。生产二进制必经此处。
-#
-# 与 ensure-webdist 拆成两个独立 target 是有意为之——它们都是 phony，但
-# make 只对"同名 phony"去重；一旦 ci 链路里 vet/test 先触发了 ensure-webdist
-# 的 placeholder，再去 build-backend 时如果共用同一 target，会被去重跳过、
-# 把 placeholder 嵌进二进制。拆开后 sync-webdist 与 ensure-webdist 各自
-# 独立调度，互不干扰。
 sync-webdist: build-web
 	rm -rf $(WEBDIST)
 	cp -r web/dist $(WEBDIST)
 	touch $(WEBDIST)/.gitkeep
 	@echo "已强制同步 web/dist → $(WEBDIST)"
 
-# ensure-webdist：轻量 bootstrap，仅为 test / vet 这类不需要真实前端内容
-# 的目标保底 //go:embed 编译。不触发 pnpm，避免后端单测受前端依赖牵连。
-# *不保证* webdist 是 fresh —— 生产构建走 sync-webdist。
+# ensure-webdist：轻量 bootstrap，仅为 test / vet 保底 //go:embed 编译，
+# 不触发 pnpm。生产构建走 sync-webdist。
 ensure-webdist:
 	@if [ ! "$$(ls -A $(WEBDIST) 2>/dev/null)" ]; then \
 		mkdir -p $(WEBDIST); \
@@ -59,19 +44,21 @@ ensure-webdist:
 
 # ===================== 开发 =====================
 
-dev: build-web ## 构建前端资产并提示如何在 core 里 dev 加载本插件
-	@echo "在 airgate-core/backend/config.yaml 的 plugins.dev 节追加："
+dev: ## 本地开发说明：后端 :8181 + 前端 vite :5174（代理 /api /auth /assets-runtime）
+	@echo "终端 1（后端，先准备好 Postgres 与 core）："
+	@echo "  cd backend && \\"
+	@echo "    DATABASE_URL=postgres://user:pass@localhost:5432/studio?sslmode=disable \\"
+	@echo "    AIRGATE_BASE_URL=http://localhost:8080 \\"
+	@echo "    OAUTH_CLIENT_ID=xxx OAUTH_CLIENT_SECRET=xxx \\"
+	@echo "    PUBLIC_BASE_URL=http://localhost:5174 \\"
+	@echo "    SESSION_SECRET=dev-secret \\"
+	@echo "    go run ."
 	@echo ""
-	@echo "  plugins:"
-	@echo "    dev:"
-	@echo "      - name: airgate-studio"
-	@echo "        path: $(realpath ./backend)"
-	@echo ""
-	@echo "然后启动 core: cd airgate-core/backend && go run ./cmd/server"
+	@echo "终端 2（前端热更新）：cd web && pnpm dev"
 
 # ===================== 质量检查 =====================
 
-ci: ensure-webdist lint vet test build-backend ## 本地运行与 CI 完全一致的检查
+ci: ensure-webdist lint vet test build ## 本地运行与 CI 完全一致的检查
 
 pre-commit: ensure-webdist lint test vet ## pre-commit hook 调用
 
@@ -80,7 +67,7 @@ lint: ## 代码检查（需要安装 golangci-lint）
 		echo "错误: 未安装 golangci-lint，请执行: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
 		exit 1; \
 	fi
-	@cd backend && golangci-lint run ./...
+	@cd backend && GOWORK=off golangci-lint run ./...
 	@cd web && pnpm exec tsc --noEmit
 	@cd web && pnpm lint
 	@echo "代码检查通过"
@@ -89,10 +76,10 @@ type-check: ## 前端 TypeScript 类型检查
 	cd web && pnpm type-check
 
 test: ensure-webdist ## 运行后端测试
-	cd backend && $(GO) test ./...
+	cd backend && GOWORK=off $(GO) test ./...
 
 vet: ensure-webdist ## 静态分析
-	cd backend && $(GO) vet ./...
+	cd backend && GOWORK=off $(GO) vet ./...
 
 fmt: ## 格式化后端代码
 	cd backend && $(GO) fmt ./...

@@ -3,10 +3,11 @@ package studio
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
-const executorPluginID = "gateway-openai"
-
+// createGenerationTaskRequest 创建生成任务的请求体（与原插件形态保持兼容，
+// platform 字段前端仍会传，这里接受但不参与执行——独立部署下渠道由 core 调度）。
 type createGenerationTaskRequest struct {
 	Kind       string                 `json:"kind"`
 	Operation  string                 `json:"operation"`
@@ -50,10 +51,14 @@ func resolveTaskType(kind, operation string) string {
 	}
 }
 
+// buildTaskInput 组装任务 input（JSONB 落库）。
+// 展示性元数据（operation/size/quality）一并放进 input——本地任务表没有独立
+// attributes 列，worker 只读取 model/prompt/images/mask 这几个键，其余键对执行无副作用。
 func buildTaskInput(req createGenerationTaskRequest) map[string]interface{} {
 	input := map[string]interface{}{
-		"prompt": req.Prompt,
-		"model":  req.Model,
+		"prompt":    req.Prompt,
+		"model":     req.Model,
+		"operation": req.Operation,
 	}
 	if req.GroupID > 0 {
 		input["group_id"] = req.GroupID
@@ -62,7 +67,7 @@ func buildTaskInput(req createGenerationTaskRequest) map[string]interface{} {
 		if key == "" || value == nil {
 			continue
 		}
-		if key == "model" || key == "prompt" {
+		if key == "model" || key == "prompt" || key == "operation" {
 			continue
 		}
 		if s, ok := value.(string); ok && strings.TrimSpace(s) == "" {
@@ -83,31 +88,19 @@ func buildTaskInput(req createGenerationTaskRequest) map[string]interface{} {
 	return input
 }
 
-func buildTaskAttributes(req createGenerationTaskRequest) map[string]interface{} {
-	attrs := map[string]interface{}{
-		"kind":      req.Kind,
-		"operation": req.Operation,
-		"platform":  req.Platform,
-		"model":     req.Model,
-	}
-	for _, key := range []string{"size", "quality"} {
-		if value, ok := req.Parameters[key]; ok && value != nil && fmt.Sprint(value) != "" {
-			attrs[key] = fmt.Sprint(value)
-		}
-	}
-	return attrs
-}
-
-func buildGenerationTaskResponse(task *hostTask) map[string]interface{} {
+// buildGenerationTaskResponse 把本地任务映射为对前端的响应（保持原插件时代的字段形状：
+// result_content 为 markdown 图链文本，前端画廊按此解析）。
+func buildGenerationTaskResponse(task *Task) map[string]interface{} {
 	resp := map[string]interface{}{
-		"id":         task.ID,
-		"task_id":    task.ID,
-		"status":     task.Status,
-		"progress":   task.Progress,
-		"created_at": task.CreatedAt,
+		"id":             task.ID,
+		"task_id":        task.ID,
+		"public_task_id": task.PublicID,
+		"status":         task.Status,
+		"progress":       task.Progress,
+		"created_at":     formatTaskTime(task.CreatedAt),
 	}
-	if task.CompletedAt != "" {
-		resp["completed_at"] = task.CompletedAt
+	if task.CompletedAt != nil {
+		resp["completed_at"] = formatTaskTime(*task.CompletedAt)
 	}
 	if task.Input != nil {
 		if v, ok := task.Input["prompt"]; ok {
@@ -124,35 +117,36 @@ func buildGenerationTaskResponse(task *hostTask) map[string]interface{} {
 		if content, ok := task.Output["content"].(string); ok && content != "" {
 			resp["result_content"] = content
 		}
+		if images := stringSliceFromAny(task.Output["images"]); len(images) > 0 {
+			resp["images"] = images
+		}
 		if model, ok := task.Output["model"]; ok {
 			resp["model"] = model
 		}
-		for _, key := range []string{"input_tokens", "output_tokens", "cost", "usage_id"} {
-			if v, ok := task.Output[key]; ok {
-				resp[key] = v
-			}
+		if usage, ok := task.Output["usage"]; ok {
+			resp["usage"] = usage
 		}
 	}
 	if task.ErrorMessage != "" {
 		resp["error_message"] = task.ErrorMessage
 	}
-	// 从 input 或 attributes 补充展示字段
+	// 从 input 补充展示字段
 	if _, ok := resp["model"]; !ok {
 		if v, ok := task.Input["model"]; ok {
 			resp["model"] = v
 		}
 	}
-	for _, key := range []string{"size", "quality"} {
-		if v, ok := task.Attributes[key]; ok && fmt.Sprint(v) != "" {
-			resp[key] = v
-		} else if v, ok := task.Input[key]; ok && fmt.Sprint(v) != "" {
+	for _, key := range []string{"size", "quality", "operation"} {
+		if v, ok := task.Input[key]; ok && fmt.Sprint(v) != "" {
 			resp[key] = v
 		}
 	}
-	if v, ok := task.Attributes["operation"]; ok && fmt.Sprint(v) != "" {
-		resp["operation"] = v
-	}
 	return resp
+}
+
+// formatTaskTime 时间统一 RFC3339（与原 host 任务响应一致，前端直接 new Date 解析）。
+func formatTaskTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
 }
 
 func extractImageInputs(inputs []generationInput) []string {
@@ -170,6 +164,26 @@ func extractImageInputs(inputs []generationInput) []string {
 		images = append(images, input.URL)
 	}
 	return images
+}
+
+// stringFromAny 从 any 提取 string 并去首尾空白；非 string 返回空。
+func stringFromAny(value interface{}) string {
+	s, _ := value.(string)
+	return strings.TrimSpace(s)
+}
+
+// intFromAny 从 any 提取整数（JSONB 落库后数字是 float64）；不可解析返回 0。
+func intFromAny(value interface{}) int {
+	switch n := value.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
 }
 
 func stringSliceFromAny(value interface{}) []string {

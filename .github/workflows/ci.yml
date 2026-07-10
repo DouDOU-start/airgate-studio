@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [master]
 
-env:
-  GOPRIVATE: github.com/DouDOU-start/airgate-sdk
-
 jobs:
   ci:
     name: 类型检查、测试与构建
