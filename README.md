@@ -50,20 +50,20 @@
 | GET | `/assets-runtime/generated/{file}` | 生成产物图片 |
 | * | `/*` | SPA 前端（fallback index.html） |
 
-## ⚙️ 环境变量
+## ⚙️ 配置
 
-样例见 [`.env.example`](.env.example)。
+装载顺序：默认值 → `config.yaml`（`CONFIG_PATH` 指定路径，默认读工作目录下 `config.yaml`，缺省则跳过）→ 环境变量覆盖单项。推荐用 `config.yaml`，放 `backend/` 下（样例见 [`backend/config.yaml.example`](backend/config.yaml.example)，含密钥、勿提交）；纯环境变量部署见 [`.env.example`](.env.example)。
 
-| 变量 | 必填 | 说明 |
-|---|---|---|
-| `LISTEN_ADDR` | 否 | 监听地址，默认 `:8181` |
-| `DATABASE_URL` | 是 | Postgres 连接串 |
-| `AIRGATE_BASE_URL` | 是 | core 地址（服务端调用） |
-| `AIRGATE_PUBLIC_URL` | 否 | 浏览器可达的 core 地址，默认同 `AIRGATE_BASE_URL` |
-| `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` | 是 | core 侧登记的 OAuth 客户端凭据 |
-| `PUBLIC_BASE_URL` | 是 | 本应用对外地址（拼 redirect_uri） |
-| `SESSION_SECRET` | 是 | 会话 cookie HMAC 密钥 |
-| `DATA_DIR` | 否 | 数据目录，默认 `data` |
+| yaml 键 | env | 必填 | 说明 |
+|---|---|---|---|
+| `listen_addr` | `LISTEN_ADDR` | 否 | 监听地址，默认 `:8181` |
+| `database_url` | `DATABASE_URL` | 是 | Postgres 连接串 |
+| `airgate_base_url` | `AIRGATE_BASE_URL` | 是 | core 地址（服务端调用） |
+| `airgate_public_url` | `AIRGATE_PUBLIC_URL` | 否 | 浏览器可达的 core 地址，默认同 base_url |
+| `oauth_client_id` / `oauth_client_secret` | `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` | 是 | core 侧登记的 OAuth 客户端凭据 |
+| `public_base_url` | `PUBLIC_BASE_URL` | 是 | 本应用对外地址（拼 redirect_uri） |
+| `session_secret` | `SESSION_SECRET` | 是 | 会话 cookie HMAC 密钥 |
+| `data_dir` | `DATA_DIR` | 否 | 数据目录，默认 `data` |
 
 ## 📁 目录结构
 

@@ -39,7 +39,7 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 
 | 文件 | 职责 |
 |---|---|
-| `config.go` | env 配置装载（必填缺失启动即错） |
+| `config.go` | 配置装载：config.yaml（CONFIG_PATH，可缺省）+ env 覆盖（必填缺失启动即错） |
 | `db.go` | Postgres 连接 + 幂等迁移（studio_users / studio_tasks） |
 | `auth.go` | OAuth 登录/回调/登出、HMAC 会话 cookie、requireUser 中间件 |
 | `users.go` | UserStore 接口 + pg 实现（api_key 明文只存库、永不出 API） |
@@ -63,18 +63,20 @@ gpt-image/dall-e 系 `/v1/images/generations|edits`、其余回退 `/v1/chat/com
 - `cancelled` 状态预留，当前无入口。
 - 任务删除同步删产物文件（output.images 中本存储管理的 URL）。
 
-## env 配置
+## 配置
 
-| 变量 | 必填 | 说明 |
-|---|---|---|
-| `LISTEN_ADDR` | 否 | 监听地址，默认 `:8181` |
-| `DATABASE_URL` | 是 | Postgres 连接串 |
-| `AIRGATE_BASE_URL` | 是 | core 地址（服务端调用） |
-| `AIRGATE_PUBLIC_URL` | 否 | 浏览器可达的 core 地址（授权跳转），默认同上 |
-| `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` | 是 | core 侧登记的 OAuth 客户端 |
-| `PUBLIC_BASE_URL` | 是 | 本应用对外地址（拼 redirect_uri） |
-| `SESSION_SECRET` | 是 | 会话 cookie HMAC 密钥 |
-| `DATA_DIR` | 否 | 数据目录，默认 `data`（产物在 `data/assets/generated/`） |
+装载顺序：默认值 → `config.yaml`（`CONFIG_PATH` 指定，默认工作目录 `config.yaml`，即 `backend/config.yaml`，缺省跳过；显式指定但文件不存在报错）→ env 覆盖单项。样例 `backend/config.yaml.example`；`config.yaml` 已 gitignore（含密钥）。
+
+| yaml 键 | env | 必填 | 说明 |
+|---|---|---|---|
+| `listen_addr` | `LISTEN_ADDR` | 否 | 监听地址，默认 `:8181` |
+| `database_url` | `DATABASE_URL` | 是 | Postgres 连接串 |
+| `airgate_base_url` | `AIRGATE_BASE_URL` | 是 | core 地址（服务端调用） |
+| `airgate_public_url` | `AIRGATE_PUBLIC_URL` | 否 | 浏览器可达的 core 地址（授权跳转），默认同上 |
+| `oauth_client_id` / `oauth_client_secret` | `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` | 是 | core 侧登记的 OAuth 客户端 |
+| `public_base_url` | `PUBLIC_BASE_URL` | 是 | 本应用对外地址（拼 redirect_uri） |
+| `session_secret` | `SESSION_SECRET` | 是 | 会话 cookie HMAC 密钥 |
+| `data_dir` | `DATA_DIR` | 否 | 数据目录，默认 `data`（产物在 `data/assets/generated/`） |
 
 ## 🚫 红线
 

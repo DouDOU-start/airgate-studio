@@ -1,5 +1,7 @@
 bin/
 tmp/
+# 含 OAuth secret / 会话密钥，任何目录层级都不入版（样例见 config.yaml.example）
+config.yaml
 go.work
 go.work.sum
 *.tsbuildinfo

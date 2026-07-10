@@ -46,15 +46,11 @@ ensure-webdist:
 
 dev: ## 本地开发说明：后端 :8181 + 前端 vite :5174（代理 /api /auth /assets-runtime）
 	@echo "终端 1（后端，先准备好 Postgres 与 core）："
-	@echo "  cd backend && \\"
-	@echo "    DATABASE_URL=postgres://user:pass@localhost:5432/studio?sslmode=disable \\"
-	@echo "    AIRGATE_BASE_URL=http://localhost:8080 \\"
-	@echo "    OAUTH_CLIENT_ID=xxx OAUTH_CLIENT_SECRET=xxx \\"
-	@echo "    PUBLIC_BASE_URL=http://localhost:5174 \\"
-	@echo "    SESSION_SECRET=dev-secret \\"
-	@echo "    go run ."
+	@echo "  cp backend/config.yaml.example backend/config.yaml   # 按需修改（推荐；env 亦可覆盖单项）"
+	@echo "  cd backend && go run ."
 	@echo ""
 	@echo "终端 2（前端热更新）：cd web && pnpm dev"
+	@echo "  （浏览器从非本机 IP 访问时用：pnpm dev --host）"
 
 # ===================== 质量检查 =====================
 
